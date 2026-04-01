@@ -1,7 +1,4 @@
-# Toolbox...
-
 def get_read_file_tool():
-    #Read File Tool
     return {
         'name': 'read_file',
         'description': 'Reads the content of a file',
@@ -15,7 +12,6 @@ def get_read_file_tool():
     }
 
 def get_write_file_tool():
-    # Write File Tool
     return {
         'name': 'write_file',
         'description': 'Writes content to a file',
@@ -30,7 +26,6 @@ def get_write_file_tool():
     }
 
 def _edit_file_execute(inputs):
-    # Edit File Tool
     with open(inputs['path'], 'r') as f:
         content = f.read()
     
