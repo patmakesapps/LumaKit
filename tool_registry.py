@@ -1,7 +1,8 @@
+# Tool Registry...
+
 import os
 import importlib
 
-# Tool Registry...
 class ToolRegistry:
     def __init__(self):
         self.tools = {}
