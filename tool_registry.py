@@ -62,31 +62,3 @@ class ToolRegistry:
 
 
 
-
-# Create a registry
-registry = ToolRegistry()
-
-# Auto-load tools from the tools folder
-registry.load_tools_from_folder()
-
-# Test it
-print("\n=== Available Tools ===")
-for tool in registry.list():
-    print(f"  - {tool['name']}: {tool['description']}")
-
-print("\n=== Test: Write File ===")
-result = registry.execute('write_file', {'path': 'test_output.txt', 'content': 'Hello, this is a test file.'})
-print(result)
-
-print("\n=== Test: Read File ===")
-result = registry.execute('read_file', {'path': 'test_output.txt'})
-print(f"Success: {result['success']}")
-print(f"Content: {result['data']}")
-
-print("\n=== Test: Edit File ===")
-result = registry.execute('edit_file', {'path': 'test_output.txt', 'find': 'test', 'replace': 'EDITED'})
-print(result)
-
-print("\n=== Test: Read Edited File ===")
-result = registry.execute('read_file', {'path': 'test_output.txt'})
-print(f"Content: {result['data']}")

@@ -16,17 +16,17 @@ class Agent:
         return self.registry.execute(tool_name, inputs)   
 
     def get_tools_for_llm(self):
-        # Format tools into a schema that LLMs can understand
+        # Format tools into a schema that LLMs (Claude, OpenAI, etc.) can understand
         # This is used to tell the LLM what tools are available and how to call them
-        tools = self.get_available_tools()
-        return [
-            {
+        result = []
+        for tool_name in self.registry.tools.keys():
+            tool = self.registry.get(tool_name)
+            result.append({
                 'name': tool['name'],
                 'description': tool['description'],
                 'input_schema': tool['inputSchema']
-            }
-            for tool in tools
-        ] 
+            })
+        return result
     
     def run_task(self, task_description):
         # Execute a task by preparing the task description and available tools
