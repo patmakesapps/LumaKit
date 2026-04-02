@@ -9,17 +9,18 @@ print("=== Available Tools ===")
 for tool in agent.get_available_tools():
     print(f"  - {tool['name']}")
 
-# Test shell execution
-print("\n=== Test: Execute Shell Command ===")
+# Test shell execution with default timeout
+print("\n=== Test: Shell Command (default timeout) ===")
 shell_result = agent.execute_tool('execute_shell', {'command': 'python --version'})
 print("Output:")
 print(shell_result['data']['stdout'])
-if shell_result['data']['stderr']:
-    print("Errors:")
-    print(shell_result['data']['stderr'])
 print(f"Success: {shell_result['data']['success']}")
 
-# Test another command
-print("\n=== Test: List directory ===")
-shell_result = agent.execute_tool('execute_shell', {'command': 'dir' if agent.registry.tools else 'ls'})
-print(shell_result['data']['stdout'][:500])
+# Test with custom timeout
+print("\n=== Test: Shell Command (custom timeout) ===")
+shell_result = agent.execute_tool('execute_shell', {
+    'command': 'dir' if agent.registry.tools else 'ls',
+    'timeout': 120
+})
+print(shell_result['data']['stdout'][:300])
+print(f"Success: {shell_result['data']['success']}")
