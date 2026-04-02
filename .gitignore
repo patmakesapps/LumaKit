@@ -9,4 +9,3 @@ build/
 .DS_Store
 .env
 *.log
-test_output.txt

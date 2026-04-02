@@ -3,6 +3,9 @@
 import os
 import importlib
 
+from dotenv import load_dotenv
+load_dotenv()
+
 class ToolRegistry:
     def __init__(self):
         self.tools = {}
