@@ -1,10 +1,15 @@
 from tool_registry import ToolRegistry
+from ollama_client import OllamaClient
 
 class Agent:
     def __init__(self):
          # Initialize the tool registry and auto-load all tools from the tools folder
         self.registry = ToolRegistry()
         self.registry.load_tools_from_folder()
+
+        # Initialize Ollama Client
+        self.ollama = OllamaClient()
+        self.model = "gemma4:e4b"
 
     def get_available_tools(self):
         # Return a list of all available tools with their name and description
@@ -27,6 +32,20 @@ class Agent:
                 'input_schema': tool['inputSchema']
             })
         return result
+    
+    def ask_llm(self, prompt):
+        response = self.ollama.chat(
+            model=self.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            stream=False
+        )
+
+        return response.get("message", {}).get("content", "")
     
     def run_task(self, task_description):
         # Execute a task by preparing the task description and available tools

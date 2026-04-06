@@ -1,5 +1,4 @@
 from agent import Agent
-import json
 
 # Create an agent
 agent = Agent()
@@ -9,18 +8,22 @@ print("=== Available Tools ===")
 for tool in agent.get_available_tools():
     print(f"  - {tool['name']}")
 
-# Test shell execution with default timeout
-print("\n=== Test: Shell Command (default timeout) ===")
-shell_result = agent.execute_tool('execute_shell', {'command': 'python --version'})
-print("Output:")
-print(shell_result['data']['stdout'])
-print(f"Success: {shell_result['data']['success']}")
+# Print LumaKit chat 
+print("\n=== LumaKit CLI ===")
+print("Type 'exit' to quit.\n")
 
-# Test with custom timeout
-print("\n=== Test: Shell Command (custom timeout) ===")
-shell_result = agent.execute_tool('execute_shell', {
-    'command': 'dir' if agent.registry.tools else 'ls',
-    'timeout': 120
-})
-print(shell_result['data']['stdout'][:300])
-print(f"Success: {shell_result['data']['success']}")
+while True:
+    user_input = input("You: ").strip()
+
+    if user_input.lower() in ["exit", "quit"]:
+        print("Goodbye.")
+        break
+
+    if not user_input:
+        continue
+
+    try:
+        response = agent.ask_llm(user_input)
+        print(f"\nAgent: {response}\n")
+    except Exception as e:
+        print(f"\nError: {e}\n")
