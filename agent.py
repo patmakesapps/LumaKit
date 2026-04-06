@@ -1,6 +1,8 @@
-from tool_registry import ToolRegistry
-from ollama_client import OllamaClient
 import json
+import os
+
+from ollama_client import OllamaClient
+from tool_registry import ToolRegistry
 
 
 class Agent:
@@ -11,7 +13,7 @@ class Agent:
 
         # Initialize Ollama Client
         self.ollama = OllamaClient()
-        self.model = "gemma4:e4b"
+        self.model = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 
     def get_available_tools(self):
         # Return a list of all available tools with their name and description

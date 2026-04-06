@@ -1,5 +1,6 @@
-import subprocess
 import platform
+import subprocess
+
 
 def get_execute_shell_tool():
     return {
@@ -15,14 +16,14 @@ def get_execute_shell_tool():
         'execute': _execute_shell
     }
 
+
 def _execute_shell(inputs):
     command = inputs['command']
-    timeout = inputs.get('timeout', 600)  # Default 10 minutes
-    
+    timeout = inputs.get('timeout', 600)
+
     try:
-        # Use shell=True on Windows, shell=False on Unix (Linux, Mac)
         shell = platform.system() == 'Windows'
-        
+
         result = subprocess.run(
             command,
             capture_output=True,
@@ -30,7 +31,7 @@ def _execute_shell(inputs):
             timeout=timeout,
             shell=shell
         )
-        
+
         return {
             'stdout': result.stdout,
             'stderr': result.stderr,
@@ -40,5 +41,5 @@ def _execute_shell(inputs):
         }
     except subprocess.TimeoutExpired:
         return {'error': f'Command timed out ({timeout} second limit)', 'success': False, 'command': command}
-    except Exception as e:
-        return {'error': str(e), 'success': False, 'command': command}
+    except Exception as error:
+        return {'error': str(error), 'success': False, 'command': command}
