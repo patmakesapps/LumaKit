@@ -24,6 +24,7 @@ while True:
 
     try:
         response = agent.ask_llm(user_input)
-        print(f"\nAgent: {response}\n")
+        content = response.get("message", {}).get("content", "")
+        print(f"\nAgent: {content}\n")
     except Exception as e:
         print(f"\nError: {e}\n")
