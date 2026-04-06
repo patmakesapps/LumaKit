@@ -9,6 +9,7 @@ def get_web_search_tool():
         'name': 'web_search',
         'description': 'Searches the web using Google via SerpAPI and returns top results',
         'inputSchema': {
+            'type': 'object',
             'properties': {
                 'query': {'type': 'string'},
                 'num_results': {'type': 'number', 'description': 'Number of results to return (default 5)'}

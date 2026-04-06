@@ -7,6 +7,7 @@ def get_fetch_url_tool():
         'name': 'fetch_url',
         'description': 'Fetches the full content of a webpage from a given URL',
         'inputSchema': {
+            'type': 'object',
             'properties': {
                 'url': {'type': 'string'}
             },

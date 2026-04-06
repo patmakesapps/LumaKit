@@ -1,4 +1,4 @@
-from pathlib import Path
+from core.paths import get_display_path, get_repo_root, resolve_repo_path
 
 
 def get_search_file_contents_tool():
@@ -6,6 +6,7 @@ def get_search_file_contents_tool():
         'name': 'search_file_contents',
         'description': 'Searches file contents for matching text',
         'inputSchema': {
+            'type': 'object',
             'properties': {
                 'query': {'type': 'string', 'description': 'Text to search for'},
                 'path': {'type': 'string', 'description': 'Directory to search (default current directory)'},
@@ -21,7 +22,7 @@ def get_search_file_contents_tool():
 
 
 def _search_file_contents(inputs):
-    target = Path(inputs.get('path', '.'))
+    target = resolve_repo_path(inputs['path'], kind='directory') if inputs.get('path') else get_repo_root()
 
     if not target.exists():
         raise FileNotFoundError(f"Directory not found: {target}")
@@ -51,13 +52,13 @@ def _search_file_contents(inputs):
                     haystack = line if case_sensitive else line.lower()
                     if needle in haystack:
                         matches.append({
-                            'path': str(file_path),
+                            'path': get_display_path(file_path),
                             'line': line_number,
                             'content': line.rstrip()
                         })
                         if len(matches) >= max_results:
                             return {
-                                'path': str(target.resolve()),
+                                'path': get_display_path(target),
                                 'query': query,
                                 'file_pattern': file_pattern,
                                 'recursive': recursive,
@@ -71,7 +72,7 @@ def _search_file_contents(inputs):
             continue
 
     return {
-        'path': str(target.resolve()),
+        'path': get_display_path(target),
         'query': query,
         'file_pattern': file_pattern,
         'recursive': recursive,

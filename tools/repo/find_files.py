@@ -1,4 +1,4 @@
-from pathlib import Path
+from core.paths import get_display_path, get_repo_root, resolve_repo_path
 
 
 def get_find_files_tool():
@@ -6,6 +6,7 @@ def get_find_files_tool():
         'name': 'find_files',
         'description': 'Finds files by glob pattern',
         'inputSchema': {
+            'type': 'object',
             'properties': {
                 'pattern': {'type': 'string', 'description': 'Glob pattern such as *.py or **/*.md'},
                 'path': {'type': 'string', 'description': 'Directory to search (default current directory)'},
@@ -18,7 +19,7 @@ def get_find_files_tool():
 
 
 def _find_files(inputs):
-    target = Path(inputs.get('path', '.'))
+    target = resolve_repo_path(inputs['path'], kind='directory') if inputs.get('path') else get_repo_root()
 
     if not target.exists():
         raise FileNotFoundError(f"Directory not found: {target}")
@@ -28,10 +29,10 @@ def _find_files(inputs):
     pattern = inputs['pattern']
     recursive = bool(inputs.get('recursive', True))
     iterator = target.rglob(pattern) if recursive else target.glob(pattern)
-    matches = [str(path) for path in sorted(iterator) if path.is_file()]
+    matches = [get_display_path(path) for path in sorted(iterator) if path.is_file()]
 
     return {
-        'path': str(target.resolve()),
+        'path': get_display_path(target),
         'pattern': pattern,
         'recursive': recursive,
         'count': len(matches),

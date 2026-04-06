@@ -1,4 +1,4 @@
-from pathlib import Path
+from core.paths import get_display_path, get_repo_root, resolve_repo_path
 
 
 def get_list_directory_tool():
@@ -6,6 +6,7 @@ def get_list_directory_tool():
         'name': 'list_directory',
         'description': 'Lists files and folders in a directory',
         'inputSchema': {
+            'type': 'object',
             'properties': {
                 'path': {'type': 'string', 'description': 'Directory to inspect (default current directory)'},
                 'recursive': {'type': 'boolean', 'description': 'Whether to include nested files and folders'}
@@ -16,7 +17,7 @@ def get_list_directory_tool():
 
 
 def _list_directory(inputs):
-    target = Path(inputs.get('path', '.'))
+    target = resolve_repo_path(inputs['path'], kind='directory') if inputs.get('path') else get_repo_root()
 
     if not target.exists():
         raise FileNotFoundError(f"Directory not found: {target}")
@@ -30,7 +31,7 @@ def _list_directory(inputs):
     for entry in sorted(iterator, key=lambda value: (not value.is_dir(), str(value).lower())):
         item = {
             'name': entry.name,
-            'path': str(entry),
+            'path': get_display_path(entry),
             'type': 'directory' if entry.is_dir() else 'file'
         }
         if entry.is_file():
@@ -38,7 +39,7 @@ def _list_directory(inputs):
         entries.append(item)
 
     return {
-        'path': str(target.resolve()),
+        'path': get_display_path(target),
         'recursive': recursive,
         'count': len(entries),
         'entries': entries

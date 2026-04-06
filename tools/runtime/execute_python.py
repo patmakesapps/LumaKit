@@ -8,6 +8,7 @@ def get_execute_python_tool():
         'name': 'execute_python',
         'description': 'Executes Python code in a sandboxed environment and returns the output',
         'inputSchema': {
+            'type': 'object',
             'properties': {
                 'code': {'type': 'string'}
             },

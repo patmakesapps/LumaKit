@@ -7,6 +7,7 @@ def get_execute_shell_tool():
         'name': 'execute_shell',
         'description': 'Executes shell commands and returns the output',
         'inputSchema': {
+            'type': 'object',
             'properties': {
                 'command': {'type': 'string'},
                 'timeout': {'type': 'number', 'description': 'Timeout in seconds (default 600)'}
