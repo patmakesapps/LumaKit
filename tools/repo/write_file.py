@@ -5,18 +5,16 @@ from core.paths import get_display_path, resolve_repo_path
 def get_write_file_tool():
     return {
         'name': 'write_file',
-        'description': 'Writes content to a file in the repo and returns a diff summary.',
+        'description': 'Creates a new file or overwrites an existing file.',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'path': {
-                    'type': 'string',
-                    'description': 'Repo-relative or absolute file path. Unique near-matches may be resolved automatically.'
-                },
-                'content': {'type': 'string'}
+                'path': {'type': 'string'},
+                'language': {'type': 'string', 'enum': ['python', 'javascript', 'html', 'css', 'text']}
             },
-            'required': ['path', 'content']
+            'required': ['path']
         },
+        'needs_content_generation': True,
         'execute': _write_file
     }
 

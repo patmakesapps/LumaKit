@@ -4,16 +4,13 @@ from core.paths import get_display_path, get_repo_root, resolve_repo_path
 def get_search_file_contents_tool():
     return {
         'name': 'search_file_contents',
-        'description': 'Searches file contents for matching text',
+        'description': 'Search text in files.',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'query': {'type': 'string', 'description': 'Text to search for'},
-                'path': {'type': 'string', 'description': 'Directory to search (default current directory)'},
-                'file_pattern': {'type': 'string', 'description': 'Glob pattern used to filter files (default *)'},
-                'case_sensitive': {'type': 'boolean', 'description': 'Whether the search should be case-sensitive'},
-                'recursive': {'type': 'boolean', 'description': 'Whether to search subdirectories (default true)'},
-                'max_results': {'type': 'number', 'description': 'Maximum matches to return (default 50)'}
+                'query': {'type': 'string'},
+                'path': {'type': 'string'},
+                'file_pattern': {'type': 'string'}
             },
             'required': ['query']
         },

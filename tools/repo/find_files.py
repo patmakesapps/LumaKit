@@ -4,13 +4,12 @@ from core.paths import get_display_path, get_repo_root, resolve_repo_path
 def get_find_files_tool():
     return {
         'name': 'find_files',
-        'description': 'Finds files by glob pattern',
+        'description': 'Find files by glob pattern.',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'pattern': {'type': 'string', 'description': 'Glob pattern such as *.py or **/*.md'},
-                'path': {'type': 'string', 'description': 'Directory to search (default current directory)'},
-                'recursive': {'type': 'boolean', 'description': 'Whether to search subdirectories (default true)'}
+                'pattern': {'type': 'string'},
+                'path': {'type': 'string'}
             },
             'required': ['pattern']
         },

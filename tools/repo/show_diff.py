@@ -7,15 +7,11 @@ from core.paths import get_display_path, get_repo_root, resolve_repo_path
 def get_show_diff_tool():
     return {
         'name': 'show_diff',
-        'description': 'Shows the current git diff for the repo or for a specific file.',
+        'description': 'Show git diff.',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'path': {
-                    'type': 'string',
-                    'description': 'Optional repo-relative or absolute file path to diff. Unique near-matches may be resolved automatically.'
-                },
-                'context_lines': {'type': 'number', 'description': 'Unified diff context lines (default 3)'}
+                'path': {'type': 'string'}
             }
         },
         'execute': _show_diff

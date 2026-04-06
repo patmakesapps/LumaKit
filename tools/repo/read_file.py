@@ -4,14 +4,11 @@ from core.paths import get_display_path, resolve_repo_path
 def get_read_file_tool():
     return {
         'name': 'read_file',
-        'description': 'Reads a file from the repo. Path resolution is forgiving and can match a unique hidden-dot filename such as .env.example from env.example.',
+        'description': 'Read file contents.',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'path': {
-                    'type': 'string',
-                    'description': 'Repo-relative or absolute file path. Unique near-matches may be resolved automatically.'
-                }
+                'path': {'type': 'string'}
             },
             'required': ['path']
         },

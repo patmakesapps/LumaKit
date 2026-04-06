@@ -4,12 +4,12 @@ from core.paths import get_display_path, get_repo_root, resolve_repo_path
 def get_list_directory_tool():
     return {
         'name': 'list_directory',
-        'description': 'Lists files and folders in a directory',
+        'description': 'List files in a directory.',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'path': {'type': 'string', 'description': 'Directory to inspect (default current directory)'},
-                'recursive': {'type': 'boolean', 'description': 'Whether to include nested files and folders'}
+                'path': {'type': 'string'},
+                'recursive': {'type': 'boolean'}
             }
         },
         'execute': _list_directory

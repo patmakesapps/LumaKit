@@ -6,7 +6,9 @@ from tool_registry import ToolRegistry
 
 
 class Agent:
-    def __init__(self):
+    def __init__(self, verbose=False):
+        self.verbose = verbose
+
         # Initialize the tool registry and auto-load all tools from the tools folder
         self.registry = ToolRegistry()
         self.registry.load_tools_from_folder()
@@ -44,9 +46,9 @@ class Agent:
             {
                 "role": "system",
                 "content": (
-                    "You are a helpful assistant with access to external tools. "
-                    "Use tools when they help you answer accurately or complete a task. "
-                    "If a tool is not needed, respond directly."
+                    "You are Lumi, a helpful agent with access to tools for working with files and code. "
+                    "When the user asks you to create, edit, read, or find files, use the appropriate tool immediately. "
+                    "Do not ask for clarification if you can make a reasonable decision yourself. "
                 )
             },
             {
@@ -62,6 +64,9 @@ class Agent:
             stream=False
         )
 
+        if self.verbose:
+            print(f"  [raw response] {json.dumps(response.get('message', {}), default=str)[:300]}")
+
         message = response.get("message", {})
         tool_calls = message.get("tool_calls", [])
 
@@ -75,7 +80,16 @@ class Agent:
             tool_name = function_data.get("name")
             tool_inputs = function_data.get("arguments", {})
 
+            # If the tool needs content but got a description instead, generate it
+            tool_inputs = self._resolve_content(tool_name, tool_inputs)
+
+            if self.verbose:
+                print(f"  [tool call] {tool_name}({json.dumps(tool_inputs, indent=2)[:200]})")
+
             tool_result = self.execute_tool(tool_name, tool_inputs)
+
+            if self.verbose:
+                print(f"  [tool result] {json.dumps(tool_result)[:200]}")
 
             messages.append({
                 "role": "tool",
@@ -90,7 +104,52 @@ class Agent:
             stream=False
         )
 
+        if self.verbose:
+            final_msg = final_response.get("message", {})
+            print(f"  [final response] content={bool(final_msg.get('content'))}, tool_calls={bool(final_msg.get('tool_calls'))}")
+
         return final_response
+
+    def _resolve_content(self, tool_name, inputs):
+        """If a tool has needs_content_generation and no content was provided,
+        make a separate LLM call to generate the file content."""
+        tool = self.registry.get(tool_name)
+        if not tool or not tool.get('needs_content_generation'):
+            return inputs
+
+        if inputs.get('content'):
+            return inputs
+
+        path = inputs.get('path', 'file')
+        language = inputs.get('language', '')
+        hint = f" in {language}" if language else ""
+
+        gen_prompt = f"Generate starter code{hint} for a file named '{path}'. Output ONLY the raw file content. No markdown fences, no explanation."
+
+        if self.verbose:
+            print(f"  [generating content] {gen_prompt}")
+
+        response = self.ollama.chat(
+            model=self.model,
+            messages=[{"role": "user", "content": gen_prompt}],
+            stream=False
+        )
+
+        generated = response.get("message", {}).get("content", "").strip()
+
+        # Strip markdown fences if the model included them anyway
+        if generated.startswith("```"):
+            lines = generated.split("\n")
+            lines = lines[1:]  # drop opening fence
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            generated = "\n".join(lines)
+
+        if generated:
+            inputs = {**inputs, 'content': generated}
+            inputs.pop('language', None)
+
+        return inputs
 
     def run_task(self, task_description):
         # Execute a task by preparing the task description and available tools

@@ -5,15 +5,12 @@ from core.paths import get_display_path, resolve_repo_path
 def get_delete_file_tool():
     return {
         'name': 'delete_file',
-        'description': 'Deletes a repo file. By default it previews the deletion diff; it only deletes when confirm is true.',
+        'description': 'Delete a file.',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'path': {
-                    'type': 'string',
-                    'description': 'Repo-relative or absolute file path. Unique near-matches may be resolved automatically.'
-                },
-                'confirm': {'type': 'boolean', 'description': 'Must be true to perform the deletion'}
+                'path': {'type': 'string'},
+                'confirm': {'type': 'boolean'}
             },
             'required': ['path']
         },

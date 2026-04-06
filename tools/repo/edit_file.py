@@ -5,18 +5,14 @@ from core.paths import get_display_path, resolve_repo_path
 def get_edit_file_tool():
     return {
         'name': 'edit_file',
-        'description': 'Finds and replaces text in a repo file with guardrails and returns the diff.',
+        'description': 'Find and replace text in a file.',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'path': {
-                    'type': 'string',
-                    'description': 'Repo-relative or absolute file path. Unique near-matches may be resolved automatically.'
-                },
-                'find': {'type': 'string', 'description': 'Exact text to replace.'},
-                'replace': {'type': 'string', 'description': 'Replacement text.'},
-                'replace_all': {'type': 'boolean', 'description': 'Replace all matches instead of exactly one'},
-                'expected_occurrences': {'type': 'number', 'description': 'Optional exact number of matches expected before editing'}
+                'path': {'type': 'string'},
+                'find': {'type': 'string'},
+                'replace': {'type': 'string'},
+                'replace_all': {'type': 'boolean'}
             },
             'required': ['path', 'find', 'replace']
         },

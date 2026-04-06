@@ -1,7 +1,10 @@
+import sys
+
 from agent import Agent
 
 # Create an agent
-agent = Agent()
+verbose = "--verbose" in sys.argv
+agent = Agent(verbose=verbose)
 
 # Print available tools
 print("=== Available Tools ===")
