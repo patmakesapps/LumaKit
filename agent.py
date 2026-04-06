@@ -1,5 +1,6 @@
 from tool_registry import ToolRegistry
 from ollama_client import OllamaClient
+import json
 
 
 class Agent:
@@ -37,27 +38,57 @@ class Agent:
         return result
 
     def ask_llm(self, prompt):
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a helpful assistant with access to external tools. "
+                    "Use tools when they help you answer accurately or complete a task. "
+                    "If a tool is not needed, respond directly."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+
         response = self.ollama.chat(
             model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a helpful assistant with access to external tools. "
-                        "Use tools when they help you answer accurately or complete a task. "
-                        "If a tool is not needed, respond directly."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
+            messages=messages,
             tools=self.get_tools_for_llm(),
             stream=False
         )
 
-        return response
+        message = response.get("message", {})
+        tool_calls = message.get("tool_calls", [])
+
+        if not tool_calls:
+            return response
+
+        messages.append(message)
+
+        for tool_call in tool_calls:
+            function_data = tool_call.get("function", {})
+            tool_name = function_data.get("name")
+            tool_inputs = function_data.get("arguments", {})
+
+            tool_result = self.execute_tool(tool_name, tool_inputs)
+
+            messages.append({
+                "role": "tool",
+                "name": tool_name,
+                "content": json.dumps(tool_result)
+            })
+
+        final_response = self.ollama.chat(
+            model=self.model,
+            messages=messages,
+            tools=self.get_tools_for_llm(),
+            stream=False
+        )
+
+        return final_response
 
     def run_task(self, task_description):
         # Execute a task by preparing the task description and available tools
