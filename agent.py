@@ -103,17 +103,25 @@ class Agent:
         root = get_repo_root()
         project_tree = _build_project_tree(root)
 
+        # Build the tool name list for the system prompt
+        tool_names = ", ".join(sorted(self.registry.tools.keys()))
+
         # Conversation history
         self.messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are Lumi, a helpful coding agent with access to tools for working with files and code.\n"
-                    "You are working in this project directory. Here is its structure:\n\n"
+                    "You are Lumi, a helpful coding agent with access to tools for working with files and code.\n\n"
+                    f"Your tools: {tool_names}\n"
+                    "ONLY use the tools listed above. Never invent or guess tool names.\n\n"
+                    f"Current working directory: {root}\n"
                     f"```\n{project_tree}\n```\n\n"
-                    "Before editing or creating files, use read_file or list_directory to understand "
-                    "the existing code. When the user asks about the codebase, use your tools to explore it — "
-                    "don't guess. Always read a file before editing it."
+                    "Rules:\n"
+                    "- Always read a file before editing it.\n"
+                    "- Use recall to check memory when the user asks about something you might have saved.\n"
+                    "- After completing an action (commit, delete, edit, etc.), always confirm what happened.\n"
+                    "- If the user declines a tool action, do NOT retry or try alternatives. Just respond.\n"
+                    "- When the user tells you something already happened, acknowledge it — don't redo it."
                 ),
             }
         ]
@@ -160,7 +168,13 @@ class Agent:
         if preview and preview.get("diff"):
             print(render_diff(preview["diff"]))
             if not confirm("Apply this change?"):
-                return {"success": True, "data": {"skipped": True, "reason": "User declined the change."}}
+                return {
+                    "success": True,
+                    "data": {
+                        "skipped": True,
+                        "reason": "The user declined this change. Do NOT retry. Move on and respond with what you know.",
+                    },
+                }
 
         # For delete_file, inject confirm=True so it actually deletes
         if tool_name == "delete_file":
@@ -170,9 +184,14 @@ class Agent:
 
     def _handle_confirm_tool(self, tool_name, tool_inputs):
         """Show what a command/action tool will do and ask for confirmation."""
-        show_tool_call(tool_name, tool_inputs)
         if not confirm(f"Allow {tool_name}?"):
-            return {"success": True, "data": {"skipped": True, "reason": "User declined."}}
+            return {
+                "success": True,
+                "data": {
+                    "skipped": True,
+                    "reason": "The user declined this action. Do NOT retry or attempt alternatives. Move on and respond with what you know.",
+                },
+            }
         return self.execute_tool(tool_name, tool_inputs)
 
     def ask_llm(self, prompt):

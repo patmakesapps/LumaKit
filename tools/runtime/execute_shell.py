@@ -1,3 +1,4 @@
+import os
 import platform
 import subprocess
 
@@ -25,12 +26,16 @@ def _execute_shell(inputs):
     try:
         shell = platform.system() == 'Windows'
 
+        # Run commands from the project directory, not system root
+        cwd = os.getcwd()
+
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
             timeout=timeout,
-            shell=shell
+            shell=shell,
+            cwd=cwd
         )
 
         return {

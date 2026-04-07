@@ -60,8 +60,44 @@ def show_tool_result(result: dict) -> None:
         print(_c(RED, f"  error: {result.get('error', 'unknown')}"))
         return
     data = result.get("data", {})
+    if data.get("skipped"):
+        print(_c(DIM, "  (skipped)"))
+        return
     if "diff" in data and data["diff"]:
         print(render_diff(data["diff"]))
+    # Show a one-line summary for common tool results
+    summary = _summarize_result(data)
+    if summary:
+        print(_c(GREEN, f"  {summary}"))
+
+
+def _summarize_result(data: dict) -> str:
+    """Build a short one-line summary from tool result data."""
+    if data.get("committed"):
+        return f'committed: "{data.get("message", "")}"'
+    if data.get("pushed"):
+        return f'pushed to {data.get("branch", "remote")}'
+    if data.get("pulled"):
+        return f'pulled from {data.get("branch", "remote")}'
+    if data.get("deleted"):
+        return f'deleted {data.get("path", "file")}'
+    if data.get("saved"):
+        return f'memory saved (id:{data.get("id")})'
+    if "replacements" in data:
+        return f'{data["replacements"]} replacement(s) in {data.get("path", "file")}'
+    if data.get("created") is True:
+        return f'created {data.get("path", "file")} ({data.get("bytes_written", 0)} bytes)'
+    if data.get("created") is False and "bytes_written" in data:
+        return f'wrote {data.get("path", "file")} ({data.get("bytes_written", 0)} bytes)'
+    if "added" in data:
+        return f'staged {data.get("files", "files")}'
+    if "status" in data and "command" in data:
+        return "done"
+    if "count" in data and "memories" in data:
+        return f'found {data["count"]} memory(s)'
+    if "content" in data and "path" in data and len(data) <= 3:
+        return f'read {data["path"]}'
+    return ""
 
 
 class Spinner:
