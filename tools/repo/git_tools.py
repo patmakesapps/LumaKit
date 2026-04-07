@@ -199,8 +199,24 @@ def get_git_add_tool():
     }
 
 
+def _get_current_branch():
+    """Get the current branch name."""
+    result = _run_git_command("git branch --show-current")
+    if result["success"] and result["stdout"]:
+        return result["stdout"]
+    return "main"
+
+
+def _is_auth_error(stderr):
+    """Check if an error is specifically an authentication issue, not a bad command."""
+    lower = stderr.lower()
+    auth_match = any(err in lower for err in AUTH_ERRORS)
+    bad_remote = "does not appear to be a git repository" in lower
+    return auth_match and not bad_remote
+
+
 def _git_status(inputs):
-    result = _run_git_command("git status --porcelain")
+    result = _run_git_command("git status")
     if not result["success"]:
         return {"error": result.get("error", result.get("stderr", "Unknown error"))}
 
@@ -225,45 +241,39 @@ def _git_commit(inputs):
 
 
 def _git_push(inputs):
-    branch = inputs.get("branch", "")
-    cmd = f"git push {branch}".strip()
+    branch = inputs.get("branch", "") or _get_current_branch()
+    cmd = f"git push origin {branch}"
     result = _run_git_command(cmd)
 
-    # If captured mode failed with auth issues, retry interactively
-    if not result["success"]:
-        stderr = result.get("stderr", "").lower()
-        if any(err in stderr for err in AUTH_ERRORS):
-            print("  Auth required — running in foreground...")
-            result = _run_git_interactive(cmd)
+    if not result["success"] and _is_auth_error(result.get("stderr", "")):
+        print("  Auth required — running in foreground...")
+        result = _run_git_interactive(cmd)
 
     if not result["success"]:
         return {"error": result.get("stderr", result.get("error", "Push failed"))}
 
     return {
         "pushed": True,
-        "branch": branch or "current",
+        "branch": branch,
         "output": result.get("stdout", "Push complete")
     }
 
 
 def _git_pull(inputs):
-    branch = inputs.get("branch", "")
-    cmd = f"git pull {branch}".strip()
+    branch = inputs.get("branch", "") or _get_current_branch()
+    cmd = f"git pull origin {branch}"
     result = _run_git_command(cmd)
 
-    # If captured mode failed with auth issues, retry interactively
-    if not result["success"]:
-        stderr = result.get("stderr", "").lower()
-        if any(err in stderr for err in AUTH_ERRORS):
-            print("  Auth required — running in foreground...")
-            result = _run_git_interactive(cmd)
+    if not result["success"] and _is_auth_error(result.get("stderr", "")):
+        print("  Auth required — running in foreground...")
+        result = _run_git_interactive(cmd)
 
     if not result["success"]:
         return {"error": result.get("stderr", result.get("error", "Pull failed"))}
 
     return {
         "pulled": True,
-        "branch": branch or "current",
+        "branch": branch,
         "output": result.get("stdout", "Pull complete")
     }
 
