@@ -8,7 +8,8 @@
       "Bash(python -c \"from agent import Agent; from core.cli import Spinner; print\\('OK'\\)\")",
       "Bash(python -c \"from agent import Agent; from core.memory_store import save, search, get_recent, delete, get_due_reminders; print\\('All imports OK'\\)\")",
       "Bash(python -c \"from core.reminder_checker import ReminderChecker; print\\('OK'\\)\")",
-      "Bash(python -c \"from tools.memory.memory_tools import _parse_notify_at; print\\('Import OK'\\)\")"
+      "Bash(python -c \"from tools.memory.memory_tools import _parse_notify_at; print\\('Import OK'\\)\")",
+      "Bash(python -c \"from tools.repo.git_tools import _run_git_interactive; print\\('OK'\\)\")"
     ]
   }
 }

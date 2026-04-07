@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 
 def get_git_init_tool():
@@ -20,7 +21,7 @@ def get_git_init_tool():
 
 
 def _run_git_command(command):
-    """Execute a git command and return the result."""
+    """Execute a git command with captured output."""
     try:
         result = subprocess.run(
             command,
@@ -39,6 +40,34 @@ def _run_git_command(command):
         return {"success": False, "error": "Command timed out"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def _run_git_interactive(command):
+    """Run a git command in the foreground so the user can authenticate if needed.
+    Falls back to this when captured mode fails with auth/permission errors."""
+    try:
+        print(f"  Running: {command}")
+        result = subprocess.run(
+            command,
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            timeout=60,
+            shell=True
+        )
+        return {
+            "success": result.returncode == 0,
+            "stdout": "",
+            "stderr": "",
+            "returncode": result.returncode
+        }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Command timed out"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+AUTH_ERRORS = ("authentication", "permission", "denied", "fatal: could not read", "logon failed", "403")
 
 
 def _git_init(inputs):
@@ -200,13 +229,20 @@ def _git_push(inputs):
     cmd = f"git push {branch}".strip()
     result = _run_git_command(cmd)
 
+    # If captured mode failed with auth issues, retry interactively
     if not result["success"]:
-        return {"error": result.get("stderr", "Push failed")}
+        stderr = result.get("stderr", "").lower()
+        if any(err in stderr for err in AUTH_ERRORS):
+            print("  Auth required — running in foreground...")
+            result = _run_git_interactive(cmd)
+
+    if not result["success"]:
+        return {"error": result.get("stderr", result.get("error", "Push failed"))}
 
     return {
         "pushed": True,
         "branch": branch or "current",
-        "output": result["stdout"]
+        "output": result.get("stdout", "Push complete")
     }
 
 
@@ -215,13 +251,20 @@ def _git_pull(inputs):
     cmd = f"git pull {branch}".strip()
     result = _run_git_command(cmd)
 
+    # If captured mode failed with auth issues, retry interactively
     if not result["success"]:
-        return {"error": result.get("stderr", "Pull failed")}
+        stderr = result.get("stderr", "").lower()
+        if any(err in stderr for err in AUTH_ERRORS):
+            print("  Auth required — running in foreground...")
+            result = _run_git_interactive(cmd)
+
+    if not result["success"]:
+        return {"error": result.get("stderr", result.get("error", "Pull failed"))}
 
     return {
         "pulled": True,
         "branch": branch or "current",
-        "output": result["stdout"]
+        "output": result.get("stdout", "Pull complete")
     }
 
 
