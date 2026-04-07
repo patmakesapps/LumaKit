@@ -5,16 +5,15 @@ from core.paths import get_display_path, resolve_repo_path
 def get_write_file_tool():
     return {
         'name': 'write_file',
-        'description': 'Creates a new file or overwrites an existing file.',
+        'description': 'Creates a new file or overwrites an existing file with the provided content.',
         'inputSchema': {
             'type': 'object',
             'properties': {
                 'path': {'type': 'string'},
-                'language': {'type': 'string', 'enum': ['python', 'javascript', 'html', 'css', 'text']}
+                'content': {'type': 'string'}
             },
-            'required': ['path']
+            'required': ['path', 'content']
         },
-        'needs_content_generation': True,
         'execute': _write_file
     }
 
