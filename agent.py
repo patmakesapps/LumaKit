@@ -6,6 +6,9 @@ from tool_registry import ToolRegistry
 
 
 class Agent:
+    MAX_TOOL_ROUNDS = 5
+    HISTORY_TURNS = 5
+
     def __init__(self, verbose=False):
         self.verbose = verbose
 
@@ -16,6 +19,18 @@ class Agent:
         # Initialize Ollama Client
         self.ollama = OllamaClient()
         self.model = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+
+        # Conversation history
+        self.messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are Lumi, a helpful agent with access to tools for working with files and code. "
+                    "When the user asks you to create, edit, read, or find files, use the appropriate tool immediately. "
+                    "Do not ask for clarification if you can make a reasonable decision yourself. "
+                ),
+            }
+        ]
 
     def get_available_tools(self):
         # Return a list of all available tools with their name and description
@@ -31,97 +46,87 @@ class Agent:
         result = []
         for tool_name in self.registry.tools.keys():
             tool = self.registry.get(tool_name)
-            result.append({
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool["description"],
-                    "parameters": tool["inputSchema"]
+            result.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": tool["inputSchema"],
+                    },
                 }
-            })
+            )
         return result
 
+    def _trim_history(self):
+        # Keep system prompt + last N turns (each turn = user msg + assistant msg)
+        max_msgs = 1 + self.HISTORY_TURNS * 2
+        if len(self.messages) > max_msgs:
+            self.messages = [self.messages[0]] + self.messages[
+                -self.HISTORY_TURNS * 2 :
+            ]
+
     def ask_llm(self, prompt):
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are Lumi, a helpful agent with access to tools for working with files and code. "
-                    "When the user asks you to create, edit, read, or find files, use the appropriate tool immediately. "
-                    "Do not ask for clarification if you can make a reasonable decision yourself. "
+        self.messages.append({"role": "user", "content": prompt})
+        self._trim_history()
+
+        tools = self.get_tools_for_llm()
+
+        for round_num in range(self.MAX_TOOL_ROUNDS + 1):
+            response = self.ollama.chat(
+                model=self.model, messages=self.messages, tools=tools, stream=False
+            )
+
+            message = response.get("message", {})
+            tool_calls = message.get("tool_calls", [])
+
+            if self.verbose:
+                label = f"round {round_num}" if tool_calls else "final"
+                print(f"  [{label}] {json.dumps(message, default=str)[:300]}")
+
+            self.messages.append(message)
+
+            if not tool_calls:
+                return response
+
+            for tool_call in tool_calls:
+                function_data = tool_call.get("function", {})
+                tool_name = function_data.get("name")
+                tool_inputs = function_data.get("arguments", {})
+                tool_inputs = self._resolve_content(tool_name, tool_inputs)
+
+                if self.verbose:
+                    print(
+                        f"  [tool call] {tool_name}({json.dumps(tool_inputs, indent=2)[:200]})"
+                    )
+
+                tool_result = self.execute_tool(tool_name, tool_inputs)
+
+                if self.verbose:
+                    print(f"  [tool result] {json.dumps(tool_result)[:200]}")
+
+                self.messages.append(
+                    {
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": json.dumps(tool_result),
+                    }
                 )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
 
-        response = self.ollama.chat(
-            model=self.model,
-            messages=messages,
-            tools=self.get_tools_for_llm(),
-            stream=False
-        )
-
-        if self.verbose:
-            print(f"  [raw response] {json.dumps(response.get('message', {}), default=str)[:300]}")
-
-        message = response.get("message", {})
-        tool_calls = message.get("tool_calls", [])
-
-        if not tool_calls:
-            return response
-
-        messages.append(message)
-
-        for tool_call in tool_calls:
-            function_data = tool_call.get("function", {})
-            tool_name = function_data.get("name")
-            tool_inputs = function_data.get("arguments", {})
-
-            # If the tool needs content but got a description instead, generate it
-            tool_inputs = self._resolve_content(tool_name, tool_inputs)
-
-            if self.verbose:
-                print(f"  [tool call] {tool_name}({json.dumps(tool_inputs, indent=2)[:200]})")
-
-            tool_result = self.execute_tool(tool_name, tool_inputs)
-
-            if self.verbose:
-                print(f"  [tool result] {json.dumps(tool_result)[:200]}")
-
-            messages.append({
-                "role": "tool",
-                "name": tool_name,
-                "content": json.dumps(tool_result)
-            })
-
-        final_response = self.ollama.chat(
-            model=self.model,
-            messages=messages,
-            tools=self.get_tools_for_llm(),
-            stream=False
-        )
-
-        if self.verbose:
-            final_msg = final_response.get("message", {})
-            print(f"  [final response] content={bool(final_msg.get('content'))}, tool_calls={bool(final_msg.get('tool_calls'))}")
-
-        return final_response
+        return response
 
     def _resolve_content(self, tool_name, inputs):
         """If a tool has needs_content_generation and no content was provided,
         make a separate LLM call to generate the file content."""
         tool = self.registry.get(tool_name)
-        if not tool or not tool.get('needs_content_generation'):
+        if not tool or not tool.get("needs_content_generation"):
             return inputs
 
-        if inputs.get('content'):
+        if inputs.get("content"):
             return inputs
 
-        path = inputs.get('path', 'file')
-        language = inputs.get('language', '')
+        path = inputs.get("path", "file")
+        language = inputs.get("language", "")
         hint = f" in {language}" if language else ""
 
         gen_prompt = f"Generate starter code{hint} for a file named '{path}'. Output ONLY the raw file content. No markdown fences, no explanation."
@@ -132,7 +137,7 @@ class Agent:
         response = self.ollama.chat(
             model=self.model,
             messages=[{"role": "user", "content": gen_prompt}],
-            stream=False
+            stream=False,
         )
 
         generated = response.get("message", {}).get("content", "").strip()
@@ -146,8 +151,8 @@ class Agent:
             generated = "\n".join(lines)
 
         if generated:
-            inputs = {**inputs, 'content': generated}
-            inputs.pop('language', None)
+            inputs = {**inputs, "content": generated}
+            inputs.pop("language", None)
 
         return inputs
 
@@ -159,5 +164,5 @@ class Agent:
         return {
             "task": task_description,
             "tools_available": self.get_available_tools(),
-            "tools_for_llm": self.get_tools_for_llm()
+            "tools_for_llm": self.get_tools_for_llm(),
         }

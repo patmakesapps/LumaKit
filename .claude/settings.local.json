@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(python -c \"from dotenv import load_dotenv; load_dotenv\\(\\); import os; print\\(''KEY present:'', bool\\(os.getenv\\(''SERPAPI_KEY''\\)\\)\\)\")",
+      "Bash(python -c \"from dotenv import load_dotenv; load_dotenv\\(\\); import os; key = os.getenv\\(''SERPAPI_KEY''\\); print\\(repr\\(key[:10]\\) if key else ''None''\\)\")"
     ]
   }
 }
