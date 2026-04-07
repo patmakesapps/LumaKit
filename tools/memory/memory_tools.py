@@ -101,24 +101,29 @@ def get_recall_tool():
         "name": "recall",
         "description": (
             "Search long-term memory. Use this when the user asks about something "
-            "you might have saved before, or when you need context from past conversations."
+            "you might have saved before, or when you need context from past conversations. "
+            "Leave query empty to list ALL saved memories. Use short keywords to search "
+            "(e.g. 'name', 'wifi', 'appointment') — not full sentences."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "What to search for"},
-                "limit": {"type": "number", "description": "Max results (default: 10)"},
+                "query": {"type": "string", "description": "Keyword to search for. Leave empty to list all memories."},
+                "limit": {"type": "number", "description": "Max results (default: 20)"},
             },
-            "required": ["query"],
+            "required": [],
         },
         "execute": _recall,
     }
 
 
 def _recall(inputs):
-    query = inputs["query"]
-    limit = int(inputs.get("limit", 10))
-    results = memory_store.search(query, limit)
+    query = inputs.get("query", "").strip()
+    limit = int(inputs.get("limit", 20))
+    if query:
+        results = memory_store.search(query, limit)
+    else:
+        results = memory_store.get_recent(limit)
     return {"count": len(results), "memories": results}
 
 
