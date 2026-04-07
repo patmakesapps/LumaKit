@@ -1,5 +1,31 @@
 # Contributing to LumaKit
 
+## Git workflow
+
+Use short-lived branches off `main` for day-to-day work.
+
+- Create a new branch from `main` for each discrete task
+- Use clear branch names such as `feat/add-read-file-tool`, `fix/web-fetch-timeout`, or `docs/readme-update`
+- Keep the branch focused so the change is easy to review and test
+- Merge completed work back into `main`
+- If `main` moves forward while you are working, merge `main` into your branch instead of rebasing
+- Avoid a long-lived `iteration` branch unless you are intentionally collecting several related changes before merging
+
+Typical flow:
+
+```bash
+git checkout main
+git pull
+git checkout -b feat/my-change
+```
+
+Later, if needed:
+
+```bash
+git checkout feat/my-change
+git merge main
+```
+
 ## Adding a tool
 
 LumaKit auto-loads tools from the `tools/` directory. To add a new tool correctly:

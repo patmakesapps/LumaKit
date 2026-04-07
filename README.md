@@ -60,4 +60,11 @@ Tools are auto-registered from `tools/**/*.py`. The current layout is:
 
 To add a new tool, follow the guidance in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Git Workflow
+
+- Branch from `main` for each discrete task
+- Prefer short-lived branches such as `feat/add-web-tool` or `fix/tool-registry-validation`
+- Keep `main` stable and merge completed work back into `main`
+- If your branch gets behind, merge `main` into your branch instead of rebasing
+- Avoid long-lived iteration branches unless you are intentionally staging a larger milestone across multiple changes
 
