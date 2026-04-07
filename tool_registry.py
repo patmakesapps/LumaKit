@@ -69,7 +69,6 @@ class ToolRegistry:
                     tool_func = getattr(module, attr_name)
                     tool = tool_func()
                     self.register(tool)
-                    print(f"Loaded tool: {tool['name']}")
 
 
 

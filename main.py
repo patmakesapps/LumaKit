@@ -7,9 +7,9 @@ verbose = "--verbose" in sys.argv
 agent = Agent(verbose=verbose)
 
 # Print available tools
-print("=== Available Tools ===")
-for tool in agent.get_available_tools():
-    print(f"  - {tool['name']}")
+# print("=== Available Tools ===")
+ # for tool in agent.get_available_tools():
+    # print(f"  - {tool['name']}")
 
 print("\n=== LumaKit CLI ===")
 print("Type 'exit' to quit.\n")
