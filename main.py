@@ -11,12 +11,15 @@ print("=== Available Tools ===")
 for tool in agent.get_available_tools():
     print(f"  - {tool['name']}")
 
-# Print LumaKit chat 
 print("\n=== LumaKit CLI ===")
 print("Type 'exit' to quit.\n")
 
 while True:
-    user_input = input("You: ").strip()
+    try:
+        user_input = input("You: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nGoodbye.")
+        break
 
     if user_input.lower() in ["exit", "quit"]:
         print("Goodbye.")
@@ -28,6 +31,7 @@ while True:
     try:
         response = agent.ask_llm(user_input)
         content = response.get("message", {}).get("content", "")
-        print(f"\nAgent: {content}\n")
+        if content:
+            print(f"\nLumi: {content}\n")
     except Exception as e:
         print(f"\nError: {e}\n")

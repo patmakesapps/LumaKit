@@ -1,8 +1,87 @@
 import json
 import os
+from pathlib import Path
 
+from core.cli import Spinner, confirm, render_diff, show_tool_call, show_tool_result
+from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
+from core.paths import get_repo_root
 from ollama_client import OllamaClient
 from tool_registry import ToolRegistry
+
+
+# Tools that modify files — require diff preview + confirmation
+DIFF_TOOLS = {"edit_file", "write_file", "delete_file"}
+
+# Tools that run external commands — require showing the command + confirmation
+CONFIRM_TOOLS = {"execute_shell", "execute_python", "git_commit", "git_push"}
+
+
+def _build_project_tree(root: Path, max_depth: int = 3) -> str:
+    lines = []
+    skip = {".git", "__pycache__", "node_modules", ".venv", "venv", ".env"}
+
+    def _walk(directory: Path, prefix: str, depth: int):
+        if depth > max_depth:
+            return
+        try:
+            entries = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except PermissionError:
+            return
+        dirs = [e for e in entries if e.is_dir() and e.name not in skip]
+        files = [e for e in entries if e.is_file()]
+        items = dirs + files
+        for i, entry in enumerate(items):
+            connector = "└── " if i == len(items) - 1 else "├── "
+            lines.append(f"{prefix}{connector}{entry.name}{'/' if entry.is_dir() else ''}")
+            if entry.is_dir():
+                extension = "    " if i == len(items) - 1 else "│   "
+                _walk(entry, prefix + extension, depth + 1)
+
+    lines.append(f"{root.name}/")
+    _walk(root, "", 1)
+    return "\n".join(lines)
+
+
+def _preview_edit(inputs: dict) -> dict | None:
+    """Compute what edit_file would produce without writing. Returns diff info or None."""
+    from core.paths import resolve_repo_path, get_display_path
+    try:
+        path = resolve_repo_path(inputs["path"], kind="file")
+    except (FileNotFoundError, ValueError):
+        return None
+    content = path.read_text(encoding="utf-8", errors="replace")
+    newline = detect_line_ending(content)
+    find_text = normalize_line_endings(inputs["find"], newline)
+    replace_text = normalize_line_endings(inputs["replace"], newline)
+    if find_text not in content:
+        return None
+    replace_all = bool(inputs.get("replace_all", False))
+    updated = content.replace(find_text, replace_text) if replace_all else content.replace(find_text, replace_text, 1)
+    return build_unified_diff(content, updated, path)
+
+
+def _preview_write(inputs: dict) -> dict | None:
+    """Compute what write_file would produce without writing. Returns diff info."""
+    from core.paths import resolve_repo_path
+    try:
+        path = resolve_repo_path(inputs["path"], must_exist=False, kind="file")
+    except ValueError:
+        return None
+    before = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    preferred_newline = detect_line_ending(before) if before else "\n"
+    after = normalize_line_endings(inputs["content"], preferred_newline)
+    return build_unified_diff(before, after, path)
+
+
+def _preview_delete(inputs: dict) -> dict | None:
+    """Compute what delete_file would show. Returns diff info."""
+    from core.paths import resolve_repo_path
+    try:
+        path = resolve_repo_path(inputs["path"], kind="file")
+    except (FileNotFoundError, ValueError):
+        return None
+    before = path.read_text(encoding="utf-8", errors="replace")
+    return build_unified_diff(before, "", path)
 
 
 class Agent:
@@ -18,29 +97,34 @@ class Agent:
 
         # Initialize Ollama Client
         self.ollama = OllamaClient()
-        self.model = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+        self.model = os.getenv("OLLAMA_MODEL")
+
+        # Build project context
+        root = get_repo_root()
+        project_tree = _build_project_tree(root)
 
         # Conversation history
         self.messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are Lumi, a helpful agent with access to tools for working with files and code. "
+                    "You are Lumi, a helpful coding agent with access to tools for working with files and code.\n"
+                    "You are working in this project directory. Here is its structure:\n\n"
+                    f"```\n{project_tree}\n```\n\n"
+                    "Before editing or creating files, use read_file or list_directory to understand "
+                    "the existing code. When the user asks about the codebase, use your tools to explore it — "
+                    "don't guess. Always read a file before editing it."
                 ),
             }
         ]
 
     def get_available_tools(self):
-        # Return a list of all available tools with their name and description
         return self.registry.list()
 
     def execute_tool(self, tool_name, inputs):
-        # Execute a specific tool by name with the given inputs
-        # Returns a dict with success status and either data or error
         return self.registry.execute(tool_name, inputs)
 
     def get_tools_for_llm(self):
-        # Format tools into Ollama's expected tool schema
         result = []
         for tool_name in self.registry.tools.keys():
             tool = self.registry.get(tool_name)
@@ -57,12 +141,39 @@ class Agent:
         return result
 
     def _trim_history(self):
-        # Keep system prompt + last N turns (each turn = user msg + assistant msg)
         max_msgs = 1 + self.HISTORY_TURNS * 2
         if len(self.messages) > max_msgs:
             self.messages = [self.messages[0]] + self.messages[
                 -self.HISTORY_TURNS * 2 :
             ]
+
+    def _handle_diff_tool(self, tool_name, tool_inputs):
+        """Preview a file-modifying tool, show the diff, and ask for confirmation."""
+        preview = None
+        if tool_name == "edit_file":
+            preview = _preview_edit(tool_inputs)
+        elif tool_name == "write_file":
+            preview = _preview_write(tool_inputs)
+        elif tool_name == "delete_file":
+            preview = _preview_delete(tool_inputs)
+
+        if preview and preview.get("diff"):
+            print(render_diff(preview["diff"]))
+            if not confirm("Apply this change?"):
+                return {"success": True, "data": {"skipped": True, "reason": "User declined the change."}}
+
+        # For delete_file, inject confirm=True so it actually deletes
+        if tool_name == "delete_file":
+            tool_inputs["confirm"] = True
+
+        return self.execute_tool(tool_name, tool_inputs)
+
+    def _handle_confirm_tool(self, tool_name, tool_inputs):
+        """Show what a command/action tool will do and ask for confirmation."""
+        show_tool_call(tool_name, tool_inputs)
+        if not confirm(f"Allow {tool_name}?"):
+            return {"success": True, "data": {"skipped": True, "reason": "User declined."}}
+        return self.execute_tool(tool_name, tool_inputs)
 
     def ask_llm(self, prompt):
         self.messages.append({"role": "user", "content": prompt})
@@ -71,9 +182,14 @@ class Agent:
         tools = self.get_tools_for_llm()
 
         for round_num in range(self.MAX_TOOL_ROUNDS + 1):
-            response = self.ollama.chat(
-                model=self.model, messages=self.messages, tools=tools, stream=False
-            )
+            spinner_msg = "Lumi is thinking" if round_num == 0 else "Lumi is working"
+            spinner = Spinner(spinner_msg).start()
+            try:
+                response = self.ollama.chat(
+                    model=self.model, messages=self.messages, tools=tools, stream=False
+                )
+            finally:
+                spinner.stop()
 
             message = response.get("message", {})
             tool_calls = message.get("tool_calls", [])
@@ -92,12 +208,16 @@ class Agent:
                 tool_name = function_data.get("name")
                 tool_inputs = function_data.get("arguments", {})
 
-                if self.verbose:
-                    print(
-                        f"  [tool call] {tool_name}({json.dumps(tool_inputs, indent=2)[:200]})"
-                    )
+                show_tool_call(tool_name, tool_inputs)
 
-                tool_result = self.execute_tool(tool_name, tool_inputs)
+                if tool_name in DIFF_TOOLS:
+                    tool_result = self._handle_diff_tool(tool_name, tool_inputs)
+                elif tool_name in CONFIRM_TOOLS:
+                    tool_result = self._handle_confirm_tool(tool_name, tool_inputs)
+                else:
+                    tool_result = self.execute_tool(tool_name, tool_inputs)
+
+                show_tool_result(tool_result)
 
                 if self.verbose:
                     print(f"  [tool result] {json.dumps(tool_result)[:200]}")
@@ -113,8 +233,6 @@ class Agent:
         return response
 
     def run_task(self, task_description):
-        # Execute a task by preparing the task description and available tools
-        # This will send the task and tools to an LLM for decision-making
         print(f"\n=== Task: {task_description} ===")
         print(f"Available tools: {[t['name'] for t in self.get_available_tools()]}")
         return {
