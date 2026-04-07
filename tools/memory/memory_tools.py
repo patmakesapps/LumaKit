@@ -1,4 +1,46 @@
+import os
+from datetime import datetime
+
 from core import memory_store
+from ollama_client import OllamaClient
+
+
+def _parse_notify_at(value: str) -> str | None:
+    """Use a focused LLM call to convert any time expression to ISO datetime.
+    Returns a valid ISO string or None if parsing failed."""
+    if not value or not value.strip():
+        return None
+
+    # Already valid ISO — skip the LLM call
+    try:
+        datetime.fromisoformat(value)
+        return value
+    except (ValueError, TypeError):
+        pass
+
+    # Ask the LLM to convert it
+    now = datetime.now().isoformat()
+    prompt = (
+        f"The current date and time is: {now}\n"
+        f"Convert this to an ISO 8601 datetime string: \"{value}\"\n"
+        "Respond with ONLY the datetime string, nothing else. Example: 2026-04-08T14:30:00"
+    )
+
+    try:
+        client = OllamaClient()
+        model = os.getenv("OLLAMA_MODEL")
+        response = client.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+        )
+        result = response.get("message", {}).get("content", "").strip()
+
+        # Validate that the LLM actually returned a valid datetime
+        datetime.fromisoformat(result)
+        return result
+    except (ValueError, TypeError, Exception):
+        return None
 
 
 def get_remember_tool():
@@ -7,7 +49,9 @@ def get_remember_tool():
         "description": (
             "Save something to long-term memory. Use this when the user asks you to "
             "remember something, or when you learn an important fact, preference, or task. "
-            "Set type to 'reminder' and provide notify_at for time-based reminders."
+            "For reminders, set type to 'reminder' and set notify_at to when the user should "
+            "be notified. Use natural language like '5 minutes', 'tomorrow at 9am', "
+            "'next Tuesday at 3pm', etc."
         ),
         "inputSchema": {
             "type": "object",
@@ -20,7 +64,7 @@ def get_remember_tool():
                 },
                 "notify_at": {
                     "type": "string",
-                    "description": "ISO datetime for reminders (e.g. 2026-04-08T09:00:00)",
+                    "description": "When to notify, in natural language (e.g. '5 minutes', 'tomorrow at 9am', 'next Friday at 2pm')",
                 },
             },
             "required": ["content"],
@@ -32,9 +76,24 @@ def get_remember_tool():
 def _remember(inputs):
     content = inputs["content"]
     memory_type = inputs.get("type", "fact")
-    notify_at = inputs.get("notify_at")
+    raw_notify = inputs.get("notify_at", "")
+
+    # For reminders, parse and validate the time
+    if memory_type == "reminder" and raw_notify:
+        notify_at = _parse_notify_at(raw_notify)
+        if not notify_at:
+            return {
+                "saved": False,
+                "error": f"Could not parse reminder time: '{raw_notify}'. Ask the user to clarify.",
+            }
+    else:
+        notify_at = None
+
     row_id = memory_store.save(content, memory_type, notify_at)
-    return {"saved": True, "id": row_id, "type": memory_type}
+    result = {"saved": True, "id": row_id, "type": memory_type}
+    if notify_at:
+        result["notify_at"] = notify_at
+    return result
 
 
 def get_recall_tool():

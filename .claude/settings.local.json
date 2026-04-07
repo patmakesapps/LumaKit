@@ -6,7 +6,9 @@
       "Bash(python -c \"from dotenv import load_dotenv; load_dotenv\\(\\); import os; key = os.getenv\\(''SERPAPI_KEY''\\); print\\(repr\\(key[:10]\\) if key else ''None''\\)\")",
       "Bash(python -c \"from agent import Agent; print\\('OK'\\)\")",
       "Bash(python -c \"from agent import Agent; from core.cli import Spinner; print\\('OK'\\)\")",
-      "Bash(python -c \"from agent import Agent; from core.memory_store import save, search, get_recent, delete, get_due_reminders; print\\('All imports OK'\\)\")"
+      "Bash(python -c \"from agent import Agent; from core.memory_store import save, search, get_recent, delete, get_due_reminders; print\\('All imports OK'\\)\")",
+      "Bash(python -c \"from core.reminder_checker import ReminderChecker; print\\('OK'\\)\")",
+      "Bash(python -c \"from tools.memory.memory_tools import _parse_notify_at; print\\('Import OK'\\)\")"
     ]
   }
 }
