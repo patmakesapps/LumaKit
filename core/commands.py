@@ -7,6 +7,7 @@ from pathlib import Path
 
 from core.chat_store import delete_chat, list_chats, load_chat, make_title, new_chat_id, save_chat
 from core.cli import BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW, _c, render_storage_meter
+from core.menu import select_menu
 
 
 def handle_command(command: str, agent, session: dict) -> bool:
@@ -51,44 +52,36 @@ def cmd_help(args: str, agent, session: dict):
 
 
 def cmd_chats(args: str, agent, session: dict):
-    parts = args.strip().split(maxsplit=1)
-    subcmd = parts[0].lower() if parts else ""
-
-    if subcmd == "resume" and len(parts) > 1:
-        _chats_resume(parts[1].strip(), agent, session)
-    elif subcmd == "delete" and len(parts) > 1:
-        _chats_delete(parts[1].strip())
-    else:
-        _chats_list()
-
-
-def _chats_list():
     chats = list_chats(limit=20)
     if not chats:
-        print(_c(DIM, "  No saved conversations."))
+        print(_c(DIM, "  No saved conversations.\n"))
         return
 
-    print(f"\n{_c(BOLD, '  Saved Conversations')}\n")
-    for i, chat in enumerate(chats, 1):
-        chat_id = chat["id"]
-        title = chat["title"]
+    # Build menu items
+    items = []
+    for chat in chats:
         updated = chat["updated_at"][:16].replace("T", " ")
-        print(f"  {_c(CYAN, f'{i}.')} {title}")
-        print(f"     {_c(DIM, f'id: {chat_id}  |  {updated}')}")
-    print(f"\n{_c(DIM, '  Use /chats resume <id> to continue a conversation.')}\n")
+        items.append({
+            "label": chat["title"],
+            "sublabel": f"id: {chat['id']}  |  {updated}",
+            "chat_id": chat["id"],
+        })
+
+    # Print blank lines so first render has space to overwrite
+    total_lines = 2 + len(items) * 2 + 1
+    print("\n" * total_lines)
+
+    result = select_menu(items, title="Saved Conversations")
+    if not result:
+        return
+
+    if result.get("action") == "select":
+        _chats_resume(result["chat_id"], agent, session)
+    elif result.get("action") == "delete":
+        _chats_delete(result["chat_id"])
 
 
 def _chats_resume(chat_id: str, agent, session: dict):
-    # Allow resuming by number from the list
-    if chat_id.isdigit():
-        chats = list_chats(limit=20)
-        idx = int(chat_id) - 1
-        if 0 <= idx < len(chats):
-            chat_id = chats[idx]["id"]
-        else:
-            print(_c(RED, f"  No conversation at index {chat_id}."))
-            return
-
     chat = load_chat(chat_id)
     if not chat:
         print(_c(RED, f"  Conversation '{chat_id}' not found."))
@@ -108,18 +101,10 @@ def _chats_resume(chat_id: str, agent, session: dict):
 
 
 def _chats_delete(chat_id: str):
-    # Allow deleting by number
-    if chat_id.isdigit():
-        chats = list_chats(limit=20)
-        idx = int(chat_id) - 1
-        if 0 <= idx < len(chats):
-            chat_id = chats[idx]["id"]
-        else:
-            print(_c(RED, f"  No conversation at index {chat_id}."))
-            return
-
+    chat = load_chat(chat_id)
+    title = chat["title"] if chat else chat_id
     if delete_chat(chat_id):
-        print(_c(GREEN, f"  Deleted conversation {chat_id}."))
+        print(_c(GREEN, f"  Deleted: {title}"))
     else:
         print(_c(RED, f"  Conversation '{chat_id}' not found."))
 
