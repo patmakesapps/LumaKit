@@ -10,3 +10,4 @@ build/
 .env
 *.log
 memory/*.db
+.claude/
