@@ -8,6 +8,7 @@ from core.diffs import build_unified_diff, detect_line_ending, normalize_line_en
 from core.paths import get_repo_root
 from ollama_client import OllamaClient, OllamaTimeoutError
 from tool_registry import ToolRegistry
+from tools.code_intel.code_index import CodeIndex
 
 
 # Tools that modify files — require diff preview + confirmation
@@ -114,7 +115,13 @@ class Agent:
 
         # Initialize the tool registry and auto-load all tools from the tools folder
         self.registry = ToolRegistry()
-        self.registry.load_tools_from_folder()
+        self.registry.load_tools_from_folder(skip_dirs={"code_intel"})
+
+        # Build code index and register its tools
+        self.code_index = CodeIndex(root=get_repo_root())
+        self.code_index.build()
+        for tool in self.code_index.get_tools():
+            self.registry.register(tool)
 
         # Initialize Ollama Client
         self.ollama = OllamaClient()
@@ -138,7 +145,7 @@ class Agent:
                     f"Current working directory: {root}\n"
                     f"```\n{project_tree}\n```\n\n"
                     "Rules:\n"
-                    "- Always read a file before editing it.\n"
+                    "- Prefer find_definition, find_usages, get_file_structure, and search_symbols for code questions. Use search_file_contents only for plain text searches.\n"
                     "- Use recall to check memory when the user asks about something you might have saved.\n"
                     "- After completing an action (commit, delete, edit, etc.), always confirm what happened.\n"
                     "- If the user declines a tool action, do NOT retry or try alternatives. Just respond.\n"
@@ -325,6 +332,12 @@ class Agent:
                     tool_result = self.execute_tool(tool_name, tool_inputs)
 
                 show_tool_result(tool_result)
+
+                # Incrementally update code index when files change
+                if tool_name in ("edit_file", "write_file", "delete_file"):
+                    changed_path = tool_inputs.get("path")
+                    if changed_path and tool_result.get("success"):
+                        self.code_index.update_file(changed_path)
 
                 if self.verbose:
                     print(f"  [tool result] {json.dumps(tool_result)[:200]}")

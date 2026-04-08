@@ -46,8 +46,9 @@ class ToolRegistry:
         except Exception as e:
             return {'success': False, 'error': str(e), 'toolName': name}    
 
-    def load_tools_from_folder(self, folder_path='tools'):
+    def load_tools_from_folder(self, folder_path='tools', skip_dirs=None):
         base_path = Path(folder_path)
+        skip_dirs = set(skip_dirs or [])
 
         if not base_path.exists():
             print(f"Tools folder not found: {folder_path}")
@@ -59,6 +60,8 @@ class ToolRegistry:
             if module_path.name == '__init__.py':
                 continue
             if module_path.parent == base_path and module_path.name.endswith('_tools.py'):
+                continue
+            if any(part in skip_dirs for part in module_path.parts):
                 continue
 
             import_path = ".".join(module_path.with_suffix('').relative_to(search_root).parts)
