@@ -1,0 +1,16 @@
+# Areas That Could Be Improved
+
+## 1. No Conversation Persistence
+The agent trims history but doesn't save it between sessions. If you quit and restart, all context is lost. Could add optional session persistence.
+
+## 2. Single Model Dependency
+The system prompt is embedded in `Agent.__init__`. If you wanted to support different personalities or models, you'd need to refactor. Consider making the system prompt configurable.
+
+## 3. Error Messages Could Be Richer
+When a tool fails, the error message is sometimes just `{"error": "..."}`. Structured error codes would help the model recover or explain issues better.
+
+## 4. No Tool Parallelism
+Tools execute sequentially in the tool-call loop. Some operations (like reading multiple files) could be parallelized for faster responses.
+
+## 5. Git Auth Fallback
+The `_run_git_interactive` fallback for auth is clever, but it requires the CLI to be in an interactive terminal. If running in a non-interactive context, this could hang.
