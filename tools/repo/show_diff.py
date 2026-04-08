@@ -24,6 +24,8 @@ def _git(args):
         cwd=get_repo_root(),
         capture_output=True,
         text=True,
+        encoding='utf-8',
+        errors='replace',
         check=False
     )
 

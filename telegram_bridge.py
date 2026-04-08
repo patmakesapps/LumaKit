@@ -32,9 +32,6 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 Spinner.start = lambda self: self
 Spinner.stop = lambda self: None
 
-# Shared state so the confirm hook can receive replies
-_pending_confirm = {"waiting": False, "answer": None}
-
 
 def telegram_api(method, params=None):
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
@@ -56,8 +53,10 @@ def send_message(text):
         telegram_api("sendMessage", {"chat_id": CHAT_ID, "text": chunk})
 
 
-def poll_for_reply(offset):
+def poll_for_reply(offset=None):
     """Block until the user sends a reply. Returns (text, new_offset)."""
+    if offset is None:
+        offset = _poll_offset["value"]
     while True:
         try:
             params = {"timeout": 30}
@@ -66,6 +65,7 @@ def poll_for_reply(offset):
             updates = telegram_api("getUpdates", params)
             for update in updates.get("result", []):
                 offset = update["update_id"] + 1
+                _poll_offset["value"] = offset
                 msg = update.get("message", {})
                 if str(msg.get("chat", {}).get("id")) != str(CHAT_ID):
                     continue
@@ -76,75 +76,128 @@ def poll_for_reply(offset):
             continue
 
 
+# Global offset tracker so confirm can poll directly
+_poll_offset = {"value": None}
+
+
 def telegram_confirm(prompt):
-    """Replacement for cli.confirm() — asks via Telegram and waits for y/n."""
-    send_message(f"⚠️ {prompt} [y/n]")
-    _pending_confirm["waiting"] = True
-    # Wait for the answer to be filled in by the main loop
-    while _pending_confirm["answer"] is None:
-        time.sleep(0.1)
-    answer = _pending_confirm["answer"]
-    _pending_confirm["waiting"] = False
-    _pending_confirm["answer"] = None
-    return answer
+    """Replacement for cli.confirm() — polls Telegram directly for y/n."""
+    send_message(f"⚠️ {prompt}\nReply y or n")
+
+    # Poll Telegram directly (this runs inside ask_llm, so the main loop is blocked)
+    while True:
+        try:
+            params = {"timeout": 30}
+            if _poll_offset["value"] is not None:
+                params["offset"] = _poll_offset["value"]
+            updates = telegram_api("getUpdates", params)
+            for update in updates.get("result", []):
+                _poll_offset["value"] = update["update_id"] + 1
+                msg = update.get("message", {})
+                if str(msg.get("chat", {}).get("id")) != str(CHAT_ID):
+                    continue
+                text = msg.get("text", "").strip().lower()
+                if text in ("y", "yes", "n", "no"):
+                    return text in ("y", "yes")
+        except (socket.timeout, urllib.error.URLError):
+            continue
 
 
-# Monkey-patch confirm so the agent's y/n prompts go through Telegram
+# Monkey-patch confirm everywhere it was imported
+import agent as agent_module
 cli_module.confirm = telegram_confirm
+agent_module.confirm = telegram_confirm
 
 
-def handle_telegram_command(text, agent, session, offset):
-    """Handle /commands sent via Telegram. Returns (handled, new_offset)."""
+def _resume_chat(chat_id, agent, session):
+    """Load a saved conversation into the agent."""
+    chat = load_chat(chat_id)
+    if not chat:
+        send_message(f"Chat '{chat_id}' not found.")
+        return
+    # Save current conversation first
+    if session["first_message_sent"] and len(agent.messages) > 1:
+        save_chat(session["chat_id"], session["title"], agent.messages)
+    agent.messages = chat["messages"]
+    session["chat_id"] = chat["id"]
+    session["title"] = chat["title"]
+    session["first_message_sent"] = True
+    send_message(f"✅ Resumed: {chat['title']} ({len(chat['messages'])} messages)")
+
+
+def handle_telegram_command(text, agent, session):
+    """Handle /commands sent via Telegram. Returns True if handled."""
     cmd = text.strip().lower()
+
+    if cmd == "/help":
+        send_message(
+            "Commands:\n\n"
+            "/chats - list & resume saved conversations\n"
+            "/new - start a fresh conversation\n"
+            "/status - show model, storage, index info\n"
+            "/help - this message"
+        )
+        return True
 
     if cmd == "/chats":
         chats = list_chats(limit=20)
         if not chats:
             send_message("No saved conversations.")
-            return True, offset
-        lines = ["📋 Saved conversations:\n"]
+            return True
+        lines = ["Saved conversations:\n"]
         for i, chat in enumerate(chats, 1):
-            updated = chat["updated_at"][:16].replace("T", " ")
-            lines.append(f"{i}. {chat['title']}\n   id: {chat['id']}  |  {updated}")
-        lines.append("\nReply with /resume <id> to load one.")
+            lines.append(f"{i}. {chat['title']}")
+        lines.append("\nReply with a number to resume, or 'cancel'.")
         send_message("\n".join(lines))
-        return True, offset
 
-    if cmd.startswith("/resume"):
-        parts = cmd.split(maxsplit=1)
-        if len(parts) < 2:
-            send_message("Usage: /resume <chat_id>")
-            return True, offset
-        chat_id = parts[1].strip()
-        chat = load_chat(chat_id)
-        if not chat:
-            send_message(f"Chat '{chat_id}' not found.")
-            return True, offset
-        # Save current conversation first
-        if session["first_message_sent"] and len(agent.messages) > 1:
-            save_chat(session["chat_id"], session["title"], agent.messages)
-        # Load the resumed conversation
-        agent.messages = chat["messages"]
-        session["chat_id"] = chat["id"]
-        session["title"] = chat["title"]
-        session["first_message_sent"] = True
-        send_message(f"✅ Resumed: {chat['title']} ({len(chat['messages'])} messages)")
-        return True, offset
+        # Wait for their pick
+        reply, _ = poll_for_reply(_poll_offset["value"])
+        if reply.lower() in ("cancel", "c", "n", "no", "nevermind"):
+            send_message("Cancelled.")
+            return True
+        try:
+            pick = int(reply) - 1
+            if 0 <= pick < len(chats):
+                _resume_chat(chats[pick]["id"], agent, session)
+            else:
+                send_message("Invalid number.")
+        except ValueError:
+            _resume_chat(reply.strip(), agent, session)
+        return True
 
     if cmd == "/new":
-        # Save current conversation
         if session["first_message_sent"] and len(agent.messages) > 1:
             save_chat(session["chat_id"], session["title"], agent.messages)
-        # Reset
         session["chat_id"] = new_chat_id()
         session["title"] = ""
         session["first_message_sent"] = False
         system_msg = agent.messages[0] if agent.messages else None
         agent.messages = [system_msg] if system_msg else []
-        send_message("🆕 New conversation started.")
-        return True, offset
+        send_message("New conversation started.")
+        return True
 
-    return False, offset
+    if cmd == "/status":
+        health = agent.storage.check_health()
+        sym_count = len(agent.code_index.table.all_symbols())
+        msg_count = len(agent.messages)
+        model = agent.model or "not set"
+        chat_count = len(list_chats(limit=100))
+        send_message(
+            f"Status\n\n"
+            f"Model: {model}\n"
+            f"Messages: {msg_count} in current conversation\n"
+            f"Saved chats: {chat_count}\n"
+            f"Index: {sym_count} symbols\n"
+            f"Storage: {health['total_display']} / {health['budget_display']} "
+            f"({health['usage_percent']:.0f}%)"
+        )
+        return True
+
+    # Ignore /start (Telegram's built-in)
+    if cmd == "/start":
+        return True
+
+    return False
 
 
 def main():
@@ -171,11 +224,10 @@ def main():
     }
 
     # Start from the latest update so we don't replay old messages
-    offset = None
     try:
         boot = telegram_api("getUpdates", {"timeout": 0})
         if boot.get("result"):
-            offset = boot["result"][-1]["update_id"] + 1
+            _poll_offset["value"] = boot["result"][-1]["update_id"] + 1
     except Exception:
         pass
 
@@ -184,13 +236,13 @@ def main():
     while True:
         try:
             params = {"timeout": 30}  # long-poll
-            if offset is not None:
-                params["offset"] = offset
+            if _poll_offset["value"] is not None:
+                params["offset"] = _poll_offset["value"]
 
             updates = telegram_api("getUpdates", params)
 
             for update in updates.get("result", []):
-                offset = update["update_id"] + 1
+                _poll_offset["value"] = update["update_id"] + 1
                 msg = update.get("message", {})
 
                 # Only accept messages from the authorized chat
@@ -201,19 +253,11 @@ def main():
                 if not text:
                     continue
 
-                # If we're waiting for a y/n confirmation answer
-                if _pending_confirm["waiting"]:
-                    _pending_confirm["answer"] = text.lower() in ("y", "yes")
-                    continue
-
                 print(f"[Telegram] {text}")
 
                 # Handle slash commands
                 if text.startswith("/"):
-                    handled, offset = handle_telegram_command(
-                        text, agent, session, offset
-                    )
-                    if handled:
+                    if handle_telegram_command(text, agent, session):
                         continue
 
                 try:
