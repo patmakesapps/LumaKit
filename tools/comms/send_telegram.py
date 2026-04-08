@@ -24,12 +24,13 @@ def get_send_telegram_tool():
 
 def _send_telegram(inputs):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    allowed = os.getenv("TELEGRAM_ALLOWED_IDS", "")
+    chat_id = allowed.split(",")[0].strip() if allowed else ""
 
     if not token:
         return {"error": "TELEGRAM_BOT_TOKEN not set in .env"}
     if not chat_id:
-        return {"error": "TELEGRAM_CHAT_ID not set in .env"}
+        return {"error": "TELEGRAM_ALLOWED_IDS not set in .env"}
 
     text = inputs["message"]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
