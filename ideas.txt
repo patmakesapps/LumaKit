@@ -1,0 +1,120 @@
+# LumaKit Improvement Ideas
+
+Generated from conversation on 2026-04-08
+
+## High-Impact Features
+
+### 1. "Undo That Shit" Command
+Every coding assistant makes mistakes. Being able to say "undo the last change" or "roll back to before that commit" using git would be huge. New users especially need this safety net. Could implement as:
+- `undo` command that reverts the last file change
+- `undo N` to revert last N changes
+- Uses git under the hood for safety
+
+### 2. Test Generation
+When writing code, automatically generate tests for it. `test_my_function.py` with proper assertions. Massive time-saver and makes codebases more robust.
+- Analyze function signatures and docstrings
+- Generate pytest or unittest boilerplate
+- Include edge cases and typical usage examples
+- Could ask user "generate tests for this file" or auto-trigger
+
+### 3. Multi-File Refactoring
+"Rename `process_data` to `process_records` everywhere in the codebase." Leverage the existing symbol table for intelligent renaming across files.
+- Use find_usages to locate all references
+- Safe rename with preview option
+- Handle imports and exports correctly
+- Could extend to "extract function" refactoring too
+
+---
+
+## For Non-Technical Users
+
+### 4. Project Templates/Scaffolding
+"Create me a blog" or "Make me a todo app" and generate a working project structure with proper files, folders, and boilerplate. Non-coders don't wanna start from scratch.
+- Template library: web app, API, CLI tool, blog, portfolio, etc.
+- Configurable: language, framework, styling choices
+- Auto-generate README, .gitignore, requirements
+- Maybe integrate with cookiecutter or similar
+
+### 5. Learning Mode
+Toggle that explains *why* you're doing things. "I'm using `asyncio` here because..." - teach while you work.
+- Optional verbose explanations
+- Links to documentation or tutorials
+- Great for onboarding new developers
+- Could track progress over time
+
+### 6. Visual Diffs
+Show changes in a nice side-by-side format instead of just text.
+- Generate HTML diff viewer
+- Or launch a simple local server (Flask/FastAPI)
+- Color-coded additions/removals
+- Line numbers and context
+
+---
+
+## Raspberry Pi / Local Deployment
+
+### 7. Voice Interface
+For the Pi, a voice-controlled assistant would be sick. "Hey Luma, add a login function."
+- Speech-to-text (whisper.cpp, Vosk)
+- Text-to-speech for responses
+- Wake word detection
+- Great for accessibility too
+
+### 8. Resource Monitor
+On a Pi, you're constrained. Show memory usage, model loading times, maybe suggest switching to a smaller model if things get tight.
+- Real-time memory/CPU display
+- Model size recommendations
+- Warn before OOM errors
+- Could show in CLI status bar
+
+---
+
+## Differentiators
+
+### 9. Workspace Sharing
+Generate a shareable link (like a gist) of the current conversation + codebase state. Great for debugging help from others or showing off what you built.
+- Export conversation + relevant code
+- Upload to gist, pastebin, or custom service
+- Could integrate with lumalien.com
+- Privacy controls: include/exclude files
+
+### 10. Performance Profiling
+"Why is this function slow?" - Run timing, identify bottlenecks, suggest optimizations. Most AI tools don't do this.
+- Python `cProfile` or `timeit` integration
+- Show execution time breakdown
+- Suggest algorithmic improvements
+- Memory profiling for large data
+
+### 11. Dependency Analysis
+"What will break if I change this function?" Show a blast radius of affected files.
+- Use existing `find_imports` tool
+- Visualize dependency graph
+- Warn about breaking changes
+- "Safe to modify" vs "proceed with caution"
+
+### 12. Git Time Machine
+"What did this file look like 3 commits ago?" or "Show me all changes to this function in the last week."
+- `git show COMMIT:filepath` wrapper
+- Timeline view of file history
+- Compare between commits
+- Blame annotations for context
+
+---
+
+## Quick Wins
+
+These would provide the most value for the least effort:
+
+1. **Undo Command** - Solves real pain point, uses existing git tools
+2. **Test Generation** - High utility, clear implementation path
+3. **Project Templates** - Huge for non-technical users, sets LumaKit apart
+
+---
+
+## Future Considerations
+
+- Plugin ecosystem for community tools
+- Multi-language support (TypeScript, Go, Rust, etc.)
+- Integration with popular IDEs (VS Code extension)
+- Cloud sync for context across devices
+- Collaborative workspaces (multi-user sessions)

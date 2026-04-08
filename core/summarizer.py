@@ -14,10 +14,14 @@ SUMMARIZE_PROMPT = (
 
 
 def needs_summarization(messages: list[dict]) -> bool:
-    """Check if the conversation has grown past the recent window."""
-    # Count user + assistant turns (skip system messages and tool messages)
-    turns = sum(1 for m in messages if m.get("role") in ("user", "assistant"))
-    return turns > RECENT_TURNS + 2  # +2 buffer before first summarization
+    """Check if the conversation has grown past the recent window.
+
+    Count user messages as a proxy for turns — each user message corresponds
+    to one turn. Counting assistant messages would inflate the count since
+    tool calls produce extra assistant messages within a single turn.
+    """
+    turns = sum(1 for m in messages if m.get("role") == "user")
+    return turns > RECENT_TURNS + 2
 
 
 def build_summary_request(messages: list[dict]) -> list[dict]:

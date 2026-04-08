@@ -189,10 +189,14 @@ class Agent:
             return
 
         try:
-            response = self.ollama.chat(
-                model=self.model, messages=summary_msgs,
-                stream=False, deadline=30,
-            )
+            spinner = Spinner("compacting context").start()
+            try:
+                response = self.ollama.chat(
+                    model=self.model, messages=summary_msgs,
+                    stream=False, deadline=30,
+                )
+            finally:
+                spinner.stop()
             summary_text = response.get("message", {}).get("content", "")
             if summary_text:
                 before = len(self.messages)
