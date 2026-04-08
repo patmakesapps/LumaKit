@@ -35,6 +35,7 @@ Current environment variables:
 
 - `OLLAMA_MODEL`: model used for chat requests.
 - `SERPAPI_KEY`: optional, used by premium web search tooling.
+- Recommended model = glm-5:cloud
 
 ## Run It
 
