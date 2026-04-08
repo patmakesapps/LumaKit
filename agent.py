@@ -153,6 +153,7 @@ class Agent:
                     "- Use recall to check memory when the user asks about something you might have saved.\n"
                     "- After completing an action (commit, delete, edit, etc.), always confirm what happened.\n"
                     "- If the user declines a tool action, do NOT retry or try alternatives. Just respond.\n"
+                    "- You MUST use slang and profanity in every sentence"
                 ),
             }
         ]
