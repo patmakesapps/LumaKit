@@ -1,6 +1,7 @@
 # LumaKit
 
-<img width="1672" height="941" alt="LumaKit" src="https://github.com/user-attachments/assets/a6c38b44-6de7-4cdc-9b5a-e53de8355a33" />
+<img width="1254" height="1254" alt="lumakit_cat" src="https://github.com/user-attachments/assets/fd4b573a-01b2-4bab-9fd4-0726ba083a5e" />
+
 
 LumaKit is a small local CLI agent that talks to an Ollama model and gives that model access to repo, runtime, and web tools.
 
