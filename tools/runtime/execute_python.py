@@ -10,9 +10,10 @@ def get_execute_python_tool():
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'code': {'type': 'string'}
+                'code': {'type': 'string'},
+                'reason': {'type': 'string', 'description': 'Brief explanation of WHY this code needs to run and what it accomplishes'}
             },
-            'required': ['code']
+            'required': ['code', 'reason']
         },
         'execute': _execute_python
     }

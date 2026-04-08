@@ -105,9 +105,10 @@ def get_git_commit_tool():
         "inputSchema": {
             "type": "object",
             "properties": {
-                "message": {"type": "string", "description": "Commit message"}
+                "message": {"type": "string", "description": "Commit message"},
+                "reason": {"type": "string", "description": "Brief explanation of WHY this commit is being made and what it accomplishes"}
             },
-            "required": ["message"]
+            "required": ["message", "reason"]
         },
         "execute": _git_commit
     }
@@ -120,9 +121,10 @@ def get_git_push_tool():
         "inputSchema": {
             "type": "object",
             "properties": {
-                "branch": {"type": "string", "description": "Branch to push (default: current branch)"}
+                "branch": {"type": "string", "description": "Branch to push (default: current branch)"},
+                "reason": {"type": "string", "description": "Brief explanation of WHY this push is needed and what it accomplishes"}
             },
-            "required": []
+            "required": ["reason"]
         },
         "execute": _git_push
     }

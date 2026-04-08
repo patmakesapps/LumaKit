@@ -11,9 +11,10 @@ def get_execute_shell_tool():
             'type': 'object',
             'properties': {
                 'command': {'type': 'string'},
-                'timeout': {'type': 'number', 'description': 'Timeout in seconds (default 600)'}
+                'timeout': {'type': 'number', 'description': 'Timeout in seconds (default 600)'},
+                'reason': {'type': 'string', 'description': 'Brief explanation of WHY this command needs to run and what it accomplishes'}
             },
-            'required': ['command']
+            'required': ['command', 'reason']
         },
         'execute': _execute_shell
     }
