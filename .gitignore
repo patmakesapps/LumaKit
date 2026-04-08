@@ -11,3 +11,4 @@ build/
 *.log
 memory/*.db
 .claude/
+.lumakit/

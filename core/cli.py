@@ -10,6 +10,7 @@ RED = "\033[31m"
 GREEN = "\033[32m"
 YELLOW = "\033[33m"
 CYAN = "\033[36m"
+PURPLE = "\033[35m"
 DIM = "\033[2m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
@@ -114,7 +115,7 @@ class Spinner:
         i = 0
         while not self._stop.is_set():
             frame = self.FRAMES[i % len(self.FRAMES)]
-            text = f"\r{_c(CYAN, frame)} {_c(DIM, self._message)}"
+            text = f"\r{_c(PURPLE, frame)} {_c(DIM, self._message)}"
             sys.stdout.write(text)
             sys.stdout.flush()
             i += 1
@@ -140,6 +141,24 @@ class Spinner:
 
     def __exit__(self, *_) -> None:
         self.stop()
+
+
+def render_storage_meter(usage_percent: float, total_display: str,
+                         budget_display: str, width: int = 20) -> str:
+    """Render a visual storage meter bar for the CLI."""
+    filled = int(width * min(usage_percent, 100) / 100)
+    empty = width - filled
+
+    if usage_percent >= 100:
+        color = RED
+    elif usage_percent >= 80:
+        color = YELLOW
+    else:
+        color = GREEN
+
+    bar = _c(color, "#" * filled) + _c(DIM, "-" * empty)
+    pct = _c(color, f"{usage_percent}%")
+    return f"  Storage [{bar}] {pct}  {total_display} / {budget_display}"
 
 
 def confirm(prompt: str = "Apply this change?") -> bool:

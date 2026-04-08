@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from tools.code_intel.cache import IndexCache, _hash_file
 from tools.code_intel.parsers import detect_language, get_snippet, parse_file
 from tools.code_intel.symbol_table import Reference, SymbolTable
 
@@ -13,18 +14,49 @@ MAX_FILE_SIZE = 512 * 1024  # 512 KB
 
 
 class CodeIndex:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, storage_manager=None):
         self.root = root
         self.table = SymbolTable()
         self.references: list[Reference] = []
         self._file_hashes: dict[str, str] = {}
+        self._cache = IndexCache(root)
+        self._storage = storage_manager
 
     # ------------------------------------------------------------------
     # Indexing
     # ------------------------------------------------------------------
 
     def build(self):
-        """Full index of the project."""
+        """Build the index, using disk cache when possible."""
+        current_files = [self._rel(f) for f in self._walk_files()]
+
+        # Try loading from cache
+        cached = self._cache.load()
+        if cached is not None:
+            self.table, self.references, self._file_hashes = cached
+            changed, deleted = self._cache.get_stale_files(
+                self.root, self._file_hashes, current_files
+            )
+
+            if not changed and not deleted:
+                return  # cache is fully current
+
+            # Remove stale entries
+            for rel in deleted:
+                self.table.remove_file(rel)
+                self.references = [r for r in self.references if r.file != rel]
+                self._file_hashes.pop(rel, None)
+
+            # Re-parse only changed files
+            for rel in changed:
+                self.table.remove_file(rel)
+                self.references = [r for r in self.references if r.file != rel]
+                self._index_file(str(self.root / rel))
+
+            self._save_cache()
+            return
+
+        # No cache — full build
         self.table = SymbolTable()
         self.references = []
         self._file_hashes = {}
@@ -32,15 +64,26 @@ class CodeIndex:
         for file_path in self._walk_files():
             self._index_file(file_path)
 
+        self._save_cache()
+
     def update_file(self, file_path: str):
         """Re-index a single file (after edit/write/delete)."""
         rel = self._rel(file_path)
         self.table.remove_file(rel)
         self.references = [r for r in self.references if r.file != rel]
+        self._file_hashes.pop(rel, None)
 
         abs_path = self.root / rel
         if abs_path.exists():
             self._index_file(str(abs_path))
+
+        self._save_cache()
+
+    def _save_cache(self):
+        """Save to disk only if storage budget allows."""
+        if self._storage and not self._storage.is_write_allowed():
+            return
+        self._cache.save(self.table, self.references, self._file_hashes)
 
     def _index_file(self, abs_path: str):
         rel = self._rel(abs_path)
@@ -59,6 +102,7 @@ class CodeIndex:
         for sym in symbols:
             self.table.add(sym)
         self.references.extend(refs)
+        self._file_hashes[rel] = _hash_file(abs_path)
 
     def _walk_files(self):
         for dirpath, dirnames, filenames in os.walk(self.root):
@@ -223,6 +267,87 @@ class CodeIndex:
             for sym, score in results
         ]
 
+    def find_imports(self, module: str | None = None,
+                     symbol: str | None = None) -> list[dict]:
+        """Find who imports a given module or symbol."""
+        results = []
+        query = module or symbol or ""
+        query_lower = query.lower()
+
+        for ref in self.references:
+            if ref.kind != "import":
+                continue
+            if query_lower in ref.context.lower():
+                results.append({
+                    "file": ref.file,
+                    "line": ref.line,
+                    "statement": ref.context,
+                })
+
+        return results
+
+    def get_call_graph(self, function: str, depth: int = 1) -> dict:
+        """Get what a function calls and what calls it."""
+        # Find the function definition
+        matches = self.table.lookup(function)
+        func_matches = [s for s in matches if s.kind in ("function", "method")]
+        if not func_matches:
+            return {"function": function, "found": False}
+
+        sym = func_matches[0]
+
+        # Read the function body to find what it calls
+        calls = []
+        try:
+            source = Path(self.root / sym.file).read_text(encoding="utf-8", errors="replace")
+            lines = source.splitlines()
+            body = lines[sym.line - 1:sym.end_line]
+
+            # Find all function/method calls in the body
+            all_symbol_names = {s.name for s in self.table.all_symbols()
+                                if s.kind in ("function", "method") and s.name != function}
+
+            for line_num, line in enumerate(body, start=sym.line):
+                for name in all_symbol_names:
+                    if f"{name}(" in line:
+                        calls.append(name)
+        except OSError:
+            pass
+
+        calls = sorted(set(calls))
+
+        # Find what calls this function (scan all files)
+        called_by = []
+        for file_path in self._walk_files():
+            rel = self._rel(file_path)
+            if rel == sym.file:
+                # Same file — skip lines within the function itself
+                try:
+                    source = Path(file_path).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for line_num, line in enumerate(source.splitlines(), start=1):
+                    if line_num < sym.line or line_num > sym.end_line:
+                        if f"{function}(" in line:
+                            called_by.append(f"{rel}:{line_num}")
+            else:
+                try:
+                    source = Path(file_path).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for line_num, line in enumerate(source.splitlines(), start=1):
+                    if f"{function}(" in line:
+                        called_by.append(f"{rel}:{line_num}")
+
+        return {
+            "function": function,
+            "found": True,
+            "file": sym.file,
+            "line": sym.line,
+            "calls": calls,
+            "called_by": called_by,
+        }
+
     # ------------------------------------------------------------------
     # Tool exports
     # ------------------------------------------------------------------
@@ -233,6 +358,8 @@ class CodeIndex:
             get_find_usages_tool(self),
             get_file_structure_tool(self),
             get_search_symbols_tool(self),
+            get_find_imports_tool(self),
+            get_call_graph_tool(self),
         ]
 
 
@@ -345,6 +472,57 @@ def get_search_symbols_tool(index: CodeIndex):
                 "limit": {"type": "integer", "description": "Max results to return (default 20)"},
             },
             "required": ["query"],
+        },
+        "execute": _execute,
+    }
+
+
+def get_find_imports_tool(index: CodeIndex):
+    def _execute(inputs):
+        results = index.find_imports(
+            module=inputs.get("module"),
+            symbol=inputs.get("symbol"),
+        )
+        query = inputs.get("module") or inputs.get("symbol", "")
+        return {"query": query, "total": len(results), "imported_by": results}
+
+    return {
+        "name": "find_imports",
+        "description": (
+            "Find all files that import a given module or symbol. "
+            "Answers 'who depends on this?' — useful for understanding blast radius of changes."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "module": {"type": "string", "description": "Module name to search for (e.g. 'core.session')"},
+                "symbol": {"type": "string", "description": "Symbol name to search for in import statements"},
+            },
+        },
+        "execute": _execute,
+    }
+
+
+def get_call_graph_tool(index: CodeIndex):
+    def _execute(inputs):
+        return index.get_call_graph(
+            function=inputs["function"],
+            depth=int(inputs.get("depth", 1)),
+        )
+
+    return {
+        "name": "get_call_graph",
+        "description": (
+            "Get the call graph for a function: what it calls and what calls it. "
+            "Useful for understanding control flow without reading entire files."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "function": {"type": "string", "description": "Function or method name"},
+                "depth": {"type": "integer", "description": "How many levels deep to trace (default 1)"},
+            },
+            "required": ["function"],
         },
         "execute": _execute,
     }
