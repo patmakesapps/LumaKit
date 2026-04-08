@@ -1,33 +1,47 @@
 import sys
 
 from agent import Agent
+from core.chat_store import make_title, new_chat_id, save_chat
 from core.cli import render_storage_meter
+from core.commands import handle_command
 from core.reminder_checker import ReminderChecker
 
 # Create an agent
 verbose = "--verbose" in sys.argv
 agent = Agent(verbose=verbose)
 
-# Start the reminder checker (polls every 60 seconds)
+# Start the reminder checker (polls every 30 seconds)
 reminders = ReminderChecker(interval=30)
 reminders.start()
+
+# Session state for chat persistence
+session = {
+    "chat_id": new_chat_id(),
+    "title": "",
+    "first_message_sent": False,
+}
 
 print("\n=== LumaKit CLI ===")
 health = agent.storage.check_health()
 print(render_storage_meter(
     health["usage_percent"], health["total_display"], health["budget_display"]
 ))
-print("Type 'exit' to quit.\n")
+print("Type /help for commands, 'exit' to quit.\n")
 
 while True:
     try:
         user_input = input("You: ").strip()
     except (EOFError, KeyboardInterrupt):
+        # Auto-save on exit
+        if session["first_message_sent"] and len(agent.messages) > 1:
+            save_chat(session["chat_id"], session["title"], agent.messages)
         reminders.stop()
         print("\nGoodbye.")
         break
 
-    if user_input.lower() in ["exit", "quit"]:
+    if user_input.lower() in ("exit", "quit"):
+        if session["first_message_sent"] and len(agent.messages) > 1:
+            save_chat(session["chat_id"], session["title"], agent.messages)
         reminders.stop()
         print("Goodbye.")
         break
@@ -35,11 +49,25 @@ while True:
     if not user_input:
         continue
 
+    # Slash commands
+    if user_input.startswith("/"):
+        handle_command(user_input, agent, session)
+        continue
+
     try:
         response = agent.ask_llm(user_input)
         content = response.get("message", {}).get("content", "")
         if content:
             print(f"\nLumi: {content}\n")
+
+        # Auto-title from first message
+        if not session["first_message_sent"]:
+            session["title"] = make_title(user_input)
+            session["first_message_sent"] = True
+
+        # Auto-save after each exchange
+        if session["first_message_sent"] and len(agent.messages) > 1:
+            save_chat(session["chat_id"], session["title"], agent.messages)
 
         # Check storage milestones after each response
         milestone = agent.storage.check_milestone()

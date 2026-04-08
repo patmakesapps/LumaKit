@@ -3,11 +3,12 @@ import os
 import time
 from pathlib import Path
 
-from core.cli import Spinner, confirm, render_diff, show_tool_call, show_tool_result
+from core.cli import DIM, Spinner, _c, confirm, render_diff, show_tool_call, show_tool_result
 from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
 from core.paths import get_repo_root
 from ollama_client import OllamaClient, OllamaTimeoutError
 from tool_registry import ToolRegistry
+from core.summarizer import apply_summary, build_summary_request, needs_summarization
 from core.storage import StorageManager
 from tools.code_intel.code_index import CodeIndex
 
@@ -107,7 +108,6 @@ def _preview_delete(inputs: dict) -> dict | None:
 
 class Agent:
     MAX_TOOL_ROUNDS = 5
-    HISTORY_TURNS = 5
     ROUND_DEADLINE = 120        # seconds per LLM call
     ASK_LLM_TIMEOUT = 300      # overall wall-clock limit (5 min)
 
@@ -180,11 +180,28 @@ class Agent:
         return result
 
     def _trim_history(self):
-        max_msgs = 1 + self.HISTORY_TURNS * 2
-        if len(self.messages) > max_msgs:
-            self.messages = [self.messages[0]] + self.messages[
-                -self.HISTORY_TURNS * 2 :
-            ]
+        if not needs_summarization(self.messages):
+            return
+
+        summary_msgs = build_summary_request(self.messages)
+        if not summary_msgs:
+            return
+
+        try:
+            response = self.ollama.chat(
+                model=self.model, messages=summary_msgs,
+                stream=False, deadline=30,
+            )
+            summary_text = response.get("message", {}).get("content", "")
+            if summary_text:
+                before = len(self.messages)
+                self.messages = apply_summary(self.messages, summary_text)
+                print(_c(DIM, f"  (context compacted: {before} msgs → {len(self.messages)})"))
+        except Exception:
+            # If summarization fails, fall back to hard trim
+            keep = 20  # ~10 turns
+            if len(self.messages) > keep + 1:
+                self.messages = [self.messages[0]] + self.messages[-keep:]
 
     def _handle_diff_tool(self, tool_name, tool_inputs):
         """Preview a file-modifying tool, show the diff, and ask for confirmation."""
