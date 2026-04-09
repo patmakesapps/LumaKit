@@ -1,6 +1,6 @@
 # LumaKit
 
-<img width="1254" height="1254" alt="lumakit_cat" src="https://github.com/user-attachments/assets/fd4b573a-01b2-4bab-9fd4-0726ba083a5e" />
+![LumaKit Logo](photos/lumakit_cat_logo.png)
 
 LumaKit is a local CLI agent that talks to an Ollama model and gives it access to repo, runtime, web, and communication tools. It also supports Telegram as a chat interface with multi-user sessions.
 
