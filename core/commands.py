@@ -43,6 +43,7 @@ def cmd_help(args: str, agent, session: dict):
   {_c(CYAN, '/chats')}                List saved conversations
   {_c(CYAN, '/chats resume <id>')}    Resume a saved conversation
   {_c(CYAN, '/chats delete <id>')}    Delete a saved conversation
+  {_c(CYAN, '/image <path> [prompt]')} Send an image to Lumi for analysis
   {_c(CYAN, '/new')}                  Start a new conversation
   {_c(CYAN, '/status')}               Show storage, index, and model info
   {_c(CYAN, '/config')}               View current configuration
@@ -135,6 +136,7 @@ def cmd_status(args: str, agent, session: dict):
     ref_count = len(agent.code_index.references)
     msg_count = len(agent.messages)
     model = agent.model or "not set"
+    fallback = agent.fallback_model or "not set"
     chat_count = len(list_chats(limit=100))
 
     print(f"""
@@ -143,6 +145,7 @@ def cmd_status(args: str, agent, session: dict):
 {meter}
 
   {_c(CYAN, 'Model:')}          {model}
+  {_c(CYAN, 'Fallback:')}       {fallback}
   {_c(CYAN, 'Messages:')}       {msg_count} in current conversation
   {_c(CYAN, 'Saved chats:')}    {chat_count}
   {_c(CYAN, 'Index:')}          {sym_count} symbols, {ref_count} references

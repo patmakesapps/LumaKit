@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import time
@@ -6,7 +7,7 @@ from pathlib import Path
 from core.cli import DIM, Spinner, _c, confirm, render_diff, show_tool_call, show_tool_result
 from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
 from core.paths import get_repo_root
-from ollama_client import OllamaClient, OllamaTimeoutError
+from ollama_client import OllamaClient, OllamaConnectionError, OllamaTimeoutError
 from tool_registry import ToolRegistry
 from core.summarizer import apply_summary, build_summary_request, needs_summarization
 from core.storage import StorageManager
@@ -128,8 +129,9 @@ class Agent:
             self.registry.register(tool)
 
         # Initialize Ollama Client
-        self.ollama = OllamaClient()
         self.model = os.getenv("OLLAMA_MODEL")
+        self.fallback_model = os.getenv("OLLAMA_FALLBACK_MODEL")
+        self.ollama = OllamaClient(fallback_model=self.fallback_model)
 
         # Build project context
         root = get_repo_root()
@@ -313,6 +315,13 @@ class Agent:
                     model=self.model, messages=self.messages, tools=tools,
                     stream=False, deadline=deadline,
                 )
+            except OllamaConnectionError as e:
+                spinner.stop()
+                msg = str(e)
+                if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
+                    msg = f"Primary model unavailable, using fallback ({self.ollama.last_model_used}). " + msg
+                self.messages.append({"role": "assistant", "content": msg})
+                return {"message": {"role": "assistant", "content": msg}}
             except OllamaTimeoutError:
                 spinner.stop()
                 msg = "Ollama stopped responding. Please check that the model is running and try again."
@@ -320,6 +329,12 @@ class Agent:
                 return {"message": {"role": "assistant", "content": msg}}
             finally:
                 spinner.stop()
+
+            # Notify if fallback model was used
+            if (self.ollama.last_model_used
+                    and self.ollama.last_model_used != self.model
+                    and round_num == 0):
+                print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
 
             message = response.get("message", {})
             tool_calls = message.get("tool_calls", [])
@@ -376,6 +391,82 @@ class Agent:
                     }
                 )
 
+        return response
+
+    SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+    def ask_llm_with_image(self, prompt, image_data=None, image_path=None):
+        """Send a message with an image to the LLM.
+
+        Args:
+            prompt: Text prompt to accompany the image.
+            image_data: Raw image bytes (e.g. from Telegram download).
+            image_path: Path to an image file on disk.
+        """
+        if image_path:
+            path = Path(image_path)
+            if not path.exists():
+                return {"message": {"role": "assistant",
+                                    "content": f"File not found: {image_path}"}}
+            if path.suffix.lower() not in self.SUPPORTED_IMAGE_EXTS:
+                return {"message": {"role": "assistant",
+                                    "content": f"Unsupported image format: {path.suffix}\n"
+                                                f"Supported: {', '.join(sorted(self.SUPPORTED_IMAGE_EXTS))}"}}
+            image_data = path.read_bytes()
+
+        if not image_data:
+            return {"message": {"role": "assistant",
+                                "content": "No image provided."}}
+
+        b64 = base64.b64encode(image_data).decode("utf-8")
+        prompt = prompt or "What do you see in this image?"
+
+        # Ollama vision format: message with "images" field
+        self.messages.append({
+            "role": "user",
+            "content": prompt,
+            "images": [b64],
+        })
+        self._trim_history()
+
+        spinner = Spinner("Lumi is looking at the image").start()
+        try:
+            remaining = self.ASK_LLM_TIMEOUT
+            deadline = min(self.ROUND_DEADLINE, remaining)
+            response = self.ollama.chat(
+                model=self.model, messages=self.messages,
+                stream=False, deadline=deadline,
+            )
+        except OllamaConnectionError as e:
+            spinner.stop()
+            msg = str(e)
+            self.messages.append({"role": "assistant", "content": msg})
+            return {"message": {"role": "assistant", "content": msg}}
+        except OllamaTimeoutError:
+            spinner.stop()
+            msg = "Ollama stopped responding while processing the image."
+            self.messages.append({"role": "assistant", "content": msg})
+            return {"message": {"role": "assistant", "content": msg}}
+        except Exception as e:
+            spinner.stop()
+            error_str = str(e)
+            # Detect vision-not-supported errors from Ollama
+            if "does not support" in error_str.lower() or "vision" in error_str.lower():
+                msg = (f"The current model ({self.model}) doesn't support image analysis. "
+                       f"Try switching to a vision model like llava or moondream.")
+            else:
+                msg = f"Error processing image: {error_str}"
+            self.messages.append({"role": "assistant", "content": msg})
+            return {"message": {"role": "assistant", "content": msg}}
+        finally:
+            spinner.stop()
+
+        # Notify if fallback was used
+        if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
+            print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
+
+        message = response.get("message", {})
+        self.messages.append(message)
         return response
 
     def run_task(self, task_description):

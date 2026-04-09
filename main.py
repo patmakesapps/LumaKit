@@ -51,6 +51,28 @@ while True:
 
     # Slash commands
     if user_input.startswith("/"):
+        # Handle /image separately since it goes through ask_llm_with_image
+        if user_input.lower().startswith("/image"):
+            parts = user_input.split(maxsplit=2)
+            if len(parts) < 2:
+                print("Usage: /image <path> [optional prompt]")
+                continue
+            img_path = parts[1].strip('"').strip("'")
+            img_prompt = parts[2] if len(parts) > 2 else None
+            try:
+                response = agent.ask_llm_with_image(prompt=img_prompt, image_path=img_path)
+                content = response.get("message", {}).get("content", "")
+                if content:
+                    print(f"\nLumi: {content}\n")
+                if not session["first_message_sent"]:
+                    session["title"] = make_title(f"Image: {img_path}")
+                    session["first_message_sent"] = True
+                if session["first_message_sent"] and len(agent.messages) > 1:
+                    save_chat(session["chat_id"], session["title"], agent.messages)
+            except Exception as e:
+                print(f"\nError: {e}\n")
+            continue
+
         handle_command(user_input, agent, session)
         continue
 

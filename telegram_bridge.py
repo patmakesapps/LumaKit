@@ -8,6 +8,7 @@ comma-separated list of Telegram chat IDs. The first ID is the owner
 and can use /adduser to authorize new users at runtime.
 """
 
+import io
 import json
 import os
 import socket
@@ -88,6 +89,22 @@ def send_message(text, chat_id=None):
     while text:
         chunk, text = text[:4096], text[4096:]
         telegram_api("sendMessage", {"chat_id": chat_id, "text": chunk})
+
+
+def download_telegram_photo(file_id):
+    """Download a photo from Telegram by file_id. Returns raw bytes or None."""
+    try:
+        file_info = telegram_api("getFile", {"file_id": file_id})
+        file_path = file_info.get("result", {}).get("file_path")
+        if not file_path:
+            return None
+        url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
+    except Exception as e:
+        print(f"[photo download error] {e}")
+        return None
 
 
 def poll_for_reply(chat_id=None):
@@ -206,6 +223,7 @@ def handle_telegram_command(text, agent, session, chat_id):
             "/new - start a fresh conversation",
             "/status - show model, storage, index info",
             "/help - this message",
+            "\nYou can also send a photo directly — Lumi will analyze it if the model supports vision.",
         ]
         if str(chat_id) == str(OWNER_ID):
             lines.append("/adduser - authorize a new user")
@@ -255,11 +273,13 @@ def handle_telegram_command(text, agent, session, chat_id):
         sym_count = len(agent.code_index.table.all_symbols())
         msg_count = len(agent.messages)
         model = agent.model or "not set"
+        fallback = agent.fallback_model or "not set"
         chat_count = len(list_chats(limit=100))
         user_count = len(ALLOWED_IDS)
         send_message(
             f"Status\n\n"
             f"Model: {model}\n"
+            f"Fallback: {fallback}\n"
             f"Messages: {msg_count} in current conversation\n"
             f"Saved chats: {chat_count}\n"
             f"Index: {sym_count} symbols\n"
@@ -367,7 +387,12 @@ def main():
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 text = msg.get("text", "").strip()
 
-                if not text or not chat_id:
+                # Check for photo
+                photo_list = msg.get("photo")
+                has_photo = bool(photo_list)
+                caption = msg.get("caption", "").strip()
+
+                if not text and not has_photo or not chat_id:
                     continue
 
                 # Unauthorized user — track them for /adduser, reject
@@ -378,7 +403,7 @@ def main():
                         "Not authorized. Ask the household admin to run /adduser.",
                         chat_id=chat_id,
                     )
-                    print(f"[unauthorized] {name} ({chat_id}): {text}")
+                    print(f"[unauthorized] {name} ({chat_id}): {text or '[photo]'}")
                     continue
 
                 # Set active user for send_message/confirm routing
@@ -388,6 +413,37 @@ def main():
                 # Get/create this user's session and swap in their history
                 session = _get_session(chat_id)
                 _swap_in(agent, session)
+
+                # Handle photo messages
+                if has_photo:
+                    print(f"[{user_name}] [photo] {caption or '(no caption)'}")
+                    # Grab the largest photo (last in the array)
+                    file_id = photo_list[-1]["file_id"]
+                    image_data = download_telegram_photo(file_id)
+                    if not image_data:
+                        send_message("Sorry, I couldn't download that photo. Please try again.")
+                        continue
+                    try:
+                        response = agent.ask_llm_with_image(
+                            prompt=caption or None, image_data=image_data
+                        )
+                        reply = response.get("message", {}).get("content", "")
+                        if reply:
+                            send_message(reply)
+                            print(f"[Lumi -> {user_name}] {reply[:200]}")
+                        else:
+                            send_message("(no response)")
+                        session["messages"] = agent.messages
+                        if not session["first_message_sent"]:
+                            session["title"] = make_title(caption or "Photo")
+                            session["first_message_sent"] = True
+                        if session["first_message_sent"] and len(agent.messages) > 1:
+                            save_chat(session["chat_id"], session["title"], agent.messages)
+                    except Exception as e:
+                        error_msg = f"Error processing photo: {e}"
+                        send_message(error_msg)
+                        print(f"[error] {error_msg}")
+                    continue
 
                 print(f"[{user_name}] {text}")
 
