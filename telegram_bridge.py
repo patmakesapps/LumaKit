@@ -26,6 +26,7 @@ from core import cli as cli_module
 from tools.comms.react import set_react_context
 from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat
 from core.cli import Spinner
+from core.heartbeat import Heartbeat
 from core.reminder_checker import ReminderChecker
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -429,6 +430,15 @@ def main():
     reminders = ReminderChecker(interval=30, notify=notify_telegram)
     reminders.start()
 
+    # Start heartbeat — sends to owner by default
+    def heartbeat_send(msg):
+        target = OWNER_ID or list(ALLOWED_IDS)[0]
+        send_message(msg, chat_id=target)
+        print(f"[heartbeat] {msg[:200]}")
+
+    heartbeat = Heartbeat(send=heartbeat_send, interval=900, cooldown=3600)
+    heartbeat.start()
+
     # Start from the latest update so we don't replay old messages
     try:
         boot = telegram_api("getUpdates", {"timeout": 0})
@@ -477,6 +487,7 @@ def main():
                 user_name = msg.get("from", {}).get("first_name", "?")
                 message_id = msg.get("message_id")
                 set_react_context(chat_id, message_id)
+                heartbeat.notify_activity()
 
                 # Get/create this user's session and swap in their history
                 session = _get_session(chat_id)
@@ -556,6 +567,7 @@ def main():
                 if sess["first_message_sent"] and sess["messages"] and len(sess["messages"]) > 1:
                     save_chat(sess["chat_id"], sess["title"], sess["messages"])
             reminders.stop()
+            heartbeat.stop()
             print("\nBridge stopped.")
             break
         except (socket.timeout, urllib.error.URLError):
