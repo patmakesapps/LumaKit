@@ -60,6 +60,9 @@ OWNER_ID = list(_env_ids)[0] if _env_ids else None
 # Per-user sessions: {chat_id: {"messages": [...], "chat_id": ..., "title": ..., ...}}
 _sessions = {}
 
+# Per-user tool visibility toggle
+_show_tools = {}  # {chat_id: bool}
+
 # Tracks which user is currently being served (for confirm/send routing)
 _active_chat_id = {"value": None}
 
@@ -157,6 +160,48 @@ import agent as agent_module
 cli_module.confirm = telegram_confirm
 agent_module.confirm = telegram_confirm
 
+# Monkey-patch show_tool_call/show_tool_result to forward to Telegram
+_original_show_tool_call = cli_module.show_tool_call
+_original_show_tool_result = cli_module.show_tool_result
+
+
+def _telegram_show_tool_call(tool_name, inputs):
+    _original_show_tool_call(tool_name, inputs)
+    chat_id = _active_chat_id["value"]
+    if chat_id and _show_tools.get(chat_id):
+        detail = ""
+        if "path" in inputs:
+            detail = f" {inputs['path']}"
+        elif "command" in inputs:
+            cmd = inputs["command"]
+            detail = f" {cmd[:80]}"
+        send_message(f"🔧 [{tool_name}]{detail}", chat_id=chat_id)
+
+
+def _telegram_show_tool_result(result):
+    _original_show_tool_result(result)
+    chat_id = _active_chat_id["value"]
+    if chat_id and _show_tools.get(chat_id):
+        if not result.get("success"):
+            send_message(f"❌ {result.get('error', 'unknown')}", chat_id=chat_id)
+        else:
+            data = result.get("data", {})
+            # Send a brief summary of the result
+            if data.get("skipped"):
+                send_message("⏭ skipped", chat_id=chat_id)
+            elif "saved" in data:
+                send_message(f"✅ saved (id:{data.get('id', '?')})", chat_id=chat_id)
+            elif "updated" in data:
+                send_message(f"✅ updated (id:{data.get('id', '?')})", chat_id=chat_id)
+            elif "count" in data:
+                send_message(f"📋 found {data['count']} result(s)", chat_id=chat_id)
+
+
+cli_module.show_tool_call = _telegram_show_tool_call
+cli_module.show_tool_result = _telegram_show_tool_result
+agent_module.show_tool_call = _telegram_show_tool_call
+agent_module.show_tool_result = _telegram_show_tool_result
+
 
 def _get_session(chat_id):
     """Get or create a session for a user."""
@@ -217,11 +262,19 @@ def handle_telegram_command(text, agent, session, chat_id):
     """Handle /commands sent via Telegram. Returns True if handled."""
     cmd = text.strip().lower()
 
+    if cmd == "/tools":
+        current = _show_tools.get(str(chat_id), False)
+        _show_tools[str(chat_id)] = not current
+        state = "on" if not current else "off"
+        send_message(f"Tool visibility: {state}")
+        return True
+
     if cmd == "/help":
         lines = [
             "Commands:\n",
             "/chats - list & resume saved conversations",
             "/new - start a fresh conversation",
+            "/tools - toggle tool call visibility",
             "/status - show model, storage, index info",
             "/help - this message",
             "\nYou can also send a photo directly — Lumi will analyze it if the model supports vision.",

@@ -93,6 +93,7 @@ def _remember(inputs):
     result = {"saved": True, "id": row_id, "type": memory_type}
     if notify_at:
         result["notify_at"] = notify_at
+        print(f"  [reminder scheduled] {notify_at}")
     return result
 
 
@@ -125,6 +126,53 @@ def _recall(inputs):
     else:
         results = memory_store.get_recent(limit)
     return {"count": len(results), "memories": results}
+
+
+def get_update_memory_tool():
+    return {
+        "name": "update_memory",
+        "description": (
+            "Update an existing memory by its id. Use this instead of creating "
+            "a new memory when the user wants to add to or change something "
+            "already saved (e.g. adding items to a list, updating a preference, "
+            "or changing a reminder time). "
+            "Always recall first to find the memory id."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "number", "description": "Memory id to update"},
+                "content": {"type": "string", "description": "The full updated content"},
+                "notify_at": {
+                    "type": "string",
+                    "description": "New reminder time in natural language (e.g. '2:15pm', 'tomorrow at 9am'). Only needed if changing when a reminder fires.",
+                },
+            },
+            "required": ["id", "content"],
+        },
+        "execute": _update_memory,
+    }
+
+
+def _update_memory(inputs):
+    memory_id = int(inputs["id"])
+    content = inputs["content"]
+    raw_notify = inputs.get("notify_at", "")
+
+    notify_at = None
+    if raw_notify:
+        notify_at = _parse_notify_at(raw_notify)
+        if not notify_at:
+            return {"updated": False, "error": f"Could not parse reminder time: '{raw_notify}'"}
+
+    updated = memory_store.update(memory_id, content, notify_at=notify_at)
+    if not updated:
+        return {"updated": False, "error": f"Memory {memory_id} not found"}
+    result = {"updated": True, "id": memory_id}
+    if notify_at:
+        result["notify_at"] = notify_at
+        print(f"  [reminder updated] {notify_at}")
+    return result
 
 
 def get_forget_tool():

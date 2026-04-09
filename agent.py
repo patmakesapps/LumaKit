@@ -154,7 +154,7 @@ class Agent:
                     f"```\n{project_tree}\n```\n\n"
                     "Rules:\n"
                     "- Prefer find_definition, find_usages, get_file_structure, search_symbols, find_imports, and get_call_graph for code questions. Use search_file_contents only for plain text searches.\n"
-                    "- Use recall to check memory when the user asks about something you might have saved.\n"
+                    "- Use recall to check memory when the user asks about something you might have saved. When the user wants to add to or change something already saved, recall first to find it, then use update_memory instead of creating a duplicate.\n"
                     "- After completing an action (commit, delete, edit, etc.), always confirm what happened.\n"
                     "- If the user declines a tool action, do NOT retry or try alternatives. Just respond.\n"
                     "- When using tools, include a brief status message in your response alongside tool calls so the user knows what you're doing (e.g. what you're about to check, what you just found, what you're fixing next).\n"

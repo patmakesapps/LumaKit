@@ -58,6 +58,25 @@ def get_recent(limit=5):
     return [dict(r) for r in rows]
 
 
+def update(memory_id, content, notify_at=None):
+    """Update a memory's content (and optionally notify_at) by id. Returns True if found and updated."""
+    conn = _connect()
+    if notify_at is not None:
+        cursor = conn.execute(
+            "UPDATE memories SET content = ?, notify_at = ? WHERE id = ?",
+            (content, notify_at, memory_id),
+        )
+    else:
+        cursor = conn.execute(
+            "UPDATE memories SET content = ? WHERE id = ?",
+            (content, memory_id),
+        )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
 def delete(memory_id):
     """Delete a memory by id."""
     conn = _connect()
