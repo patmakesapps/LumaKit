@@ -43,7 +43,8 @@ def cmd_help(args: str, agent, session: dict):
   {_c(CYAN, '/chats')}                List saved conversations
   {_c(CYAN, '/chats resume <id>')}    Resume a saved conversation
   {_c(CYAN, '/chats delete <id>')}    Delete a saved conversation
-  {_c(CYAN, '/image <path> [prompt]')} Send an image to Lumi for analysis
+  {_c(CYAN, '/p [prompt]')}             Paste clipboard image to Lumi
+  {_c(CYAN, '/image <path> [prompt]')} Send an image file to Lumi
   {_c(CYAN, '/new')}                  Start a new conversation
   {_c(CYAN, '/status')}               Show storage, index, and model info
   {_c(CYAN, '/config')}               View current configuration
