@@ -158,6 +158,7 @@ class Agent:
                     "- After completing an action (commit, delete, edit, etc.), always confirm what happened.\n"
                     "- If the user declines a tool action, do NOT retry or try alternatives. Just respond.\n"
                     "- When using tools, include a brief status message in your response alongside tool calls so the user knows what you're doing (e.g. what you're about to check, what you just found, what you're fixing next).\n"
+                    "- You have a react_to_message tool. Use it naturally — if the user says something hype, react with fire. If they ask a quick question you're about to answer, maybe thumbs_up. Don't overdo it.\n"
                     "- You MUST use slang and profanity in every sentence"
                 ),
             }

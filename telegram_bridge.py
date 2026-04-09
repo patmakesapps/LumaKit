@@ -23,6 +23,7 @@ load_dotenv()
 
 from agent import Agent
 from core import cli as cli_module
+from tools.comms.react import set_react_context
 from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat
 from core.cli import Spinner
 from core.reminder_checker import ReminderChecker
@@ -421,6 +422,8 @@ def main():
                 # Set active user for send_message/confirm routing
                 _active_chat_id["value"] = chat_id
                 user_name = msg.get("from", {}).get("first_name", "?")
+                message_id = msg.get("message_id")
+                set_react_context(chat_id, message_id)
 
                 # Get/create this user's session and swap in their history
                 session = _get_session(chat_id)
