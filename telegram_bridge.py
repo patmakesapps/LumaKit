@@ -352,7 +352,19 @@ def main():
         sys.exit(1)
 
     verbose = "--verbose" in sys.argv
-    agent = Agent(verbose=verbose)
+
+    def telegram_status(msg):
+        """Send progress updates to the active user mid-work."""
+        chat_id = _active_chat_id["value"]
+        if chat_id:
+            send_message(msg, chat_id=chat_id)
+            # Re-set typing indicator after sending the update
+            try:
+                telegram_api("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+            except Exception:
+                pass
+
+    agent = Agent(verbose=verbose, status_callback=telegram_status)
 
     # Start reminders — notify all authorized users
     def notify_telegram(reminder):
@@ -424,6 +436,10 @@ def main():
                         send_message("Sorry, I couldn't download that photo. Please try again.")
                         continue
                     try:
+                        try:
+                            telegram_api("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+                        except Exception:
+                            pass
                         response = agent.ask_llm_with_image(
                             prompt=caption or None, image_data=image_data
                         )
@@ -431,8 +447,6 @@ def main():
                         if reply:
                             send_message(reply)
                             print(f"[Lumi -> {user_name}] {reply[:200]}")
-                        else:
-                            send_message("(no response)")
                         session["messages"] = agent.messages
                         if not session["first_message_sent"]:
                             session["title"] = make_title(caption or "Photo")
@@ -453,13 +467,15 @@ def main():
                         continue
 
                 try:
+                    try:
+                        telegram_api("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+                    except Exception:
+                        pass
                     response = agent.ask_llm(text)
                     reply = response.get("message", {}).get("content", "")
                     if reply:
                         send_message(reply)
                         print(f"[Lumi -> {user_name}] {reply[:200]}")
-                    else:
-                        send_message("(no response)")
 
                     # Sync messages back to session
                     session["messages"] = agent.messages

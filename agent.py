@@ -112,8 +112,10 @@ class Agent:
     ROUND_DEADLINE = 120        # seconds per LLM call
     ASK_LLM_TIMEOUT = 300      # overall wall-clock limit (5 min)
 
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, status_callback=None):
         self.verbose = verbose
+        # Called with (message_text) to send progress updates mid-work
+        self.status_callback = status_callback
 
         # Initialize storage manager first (needed by code index)
         self.storage = StorageManager(get_repo_root())
@@ -155,6 +157,7 @@ class Agent:
                     "- Use recall to check memory when the user asks about something you might have saved.\n"
                     "- After completing an action (commit, delete, edit, etc.), always confirm what happened.\n"
                     "- If the user declines a tool action, do NOT retry or try alternatives. Just respond.\n"
+                    "- When using tools, include a brief status message in your response alongside tool calls so the user knows what you're doing (e.g. what you're about to check, what you just found, what you're fixing next).\n"
                     "- You MUST use slang and profanity in every sentence"
                 ),
             }
@@ -345,7 +348,32 @@ class Agent:
 
             self.messages.append(message)
 
+            # Surface any text the model included alongside tool calls
+            mid_text = (message.get("content") or "").strip()
+            if mid_text and tool_calls and self.status_callback:
+                self.status_callback(mid_text)
+
             if not tool_calls:
+                # Empty response fix: if the model returned no text after
+                # working with tools, ask it to summarize what it did
+                if not mid_text and round_num > 0:
+                    self.messages.append({
+                        "role": "user",
+                        "content": "Summarize what you just did.",
+                    })
+                    try:
+                        spinner = Spinner("Lumi is finishing up").start()
+                        remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
+                        followup = self.ollama.chat(
+                            model=self.model, messages=self.messages,
+                            stream=False, deadline=min(self.ROUND_DEADLINE, remaining),
+                        )
+                        spinner.stop()
+                        followup_msg = followup.get("message", {})
+                        self.messages.append(followup_msg)
+                        return followup
+                    except Exception:
+                        spinner.stop()
                 return response
 
             for tool_call in tool_calls:

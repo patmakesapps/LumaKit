@@ -37,7 +37,13 @@ from core.reminder_checker import ReminderChecker
 
 # Create an agent
 verbose = "--verbose" in sys.argv
-agent = Agent(verbose=verbose)
+
+
+def cli_status(msg):
+    print(f"\nLumi: {msg}\n")
+
+
+agent = Agent(verbose=verbose, status_callback=cli_status)
 
 # Start the reminder checker (polls every 30 seconds)
 reminders = ReminderChecker(interval=30)
