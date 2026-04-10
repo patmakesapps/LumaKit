@@ -10,15 +10,18 @@ from ollama_client import OllamaClient
 
 
 class Heartbeat:
-    def __init__(self, send, interval=900, cooldown=3600):
+    def __init__(self, send, interval=900, cooldown=3600, inject_session=None):
         """
-        send     — callable(text) to message the user
-        interval — seconds between checks (default 15 min)
-        cooldown — minimum seconds between outbound messages (default 1 hr)
+        send           — callable(text) to message the user
+        interval       — seconds between checks (default 15 min)
+        cooldown       — minimum seconds between outbound messages (default 1 hr)
+        inject_session — optional callable(text) that appends an assistant message
+                         to the owner's agent session so follow-up replies have context
         """
         self._send = send
         self._interval = interval
         self._cooldown = cooldown
+        self._inject = inject_session
         self._stop = threading.Event()
         self._thread = None
         self._last_sent = 0
@@ -97,6 +100,11 @@ class Heartbeat:
 
                 if reply and reply.upper() != "NONE":
                     self._send(reply)
+                    if self._inject:
+                        try:
+                            self._inject(reply)
+                        except Exception:
+                            pass
                     self._last_sent = time.time()
                     self._last_reached_out = True
                 else:

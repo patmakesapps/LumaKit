@@ -445,7 +445,27 @@ def main():
         send_message(msg, chat_id=target)
         print(f"[heartbeat] {msg[:200]}")
 
-    heartbeat = Heartbeat(send=heartbeat_send, interval=900, cooldown=3600)
+    def heartbeat_inject_session(text):
+        """Append the heartbeat's outbound message to the owner's session
+        so follow-up replies have the context of what Lumi just said."""
+        target = OWNER_ID or (list(ALLOWED_IDS)[0] if ALLOWED_IDS else None)
+        if not target:
+            return
+        session = _get_session(target)
+        if session["messages"] is None:
+            session["messages"] = [agent.messages[0].copy()]
+        session["messages"].append({"role": "assistant", "content": text})
+        if not session["first_message_sent"]:
+            session["title"] = make_title(text)
+            session["first_message_sent"] = True
+        save_chat(session["chat_id"], session["title"], session["messages"])
+
+    heartbeat = Heartbeat(
+        send=heartbeat_send,
+        interval=900,
+        cooldown=3600,
+        inject_session=heartbeat_inject_session,
+    )
     heartbeat.start()
 
     # Start email checker — polls every 60s, triages new mail via LLM,
