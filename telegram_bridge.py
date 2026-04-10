@@ -22,11 +22,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from agent import Agent
-from core import cli as cli_module
+from core import auth, cli as cli_module
 from tools.comms.react import set_react_context
 from tools.memory.memory_tools import set_active_user
 from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat
 from core.cli import Spinner
+from core.email_checker import EmailChecker
 from core.heartbeat import Heartbeat
 from core.reminder_checker import ReminderChecker
 
@@ -407,6 +408,8 @@ def main():
         print("Set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_IDS in .env first.")
         sys.exit(1)
 
+    auth.set_owner(OWNER_ID)
+
     verbose = "--verbose" in sys.argv
 
     def telegram_status(msg):
@@ -444,6 +447,15 @@ def main():
 
     heartbeat = Heartbeat(send=heartbeat_send, interval=900, cooldown=3600)
     heartbeat.start()
+
+    # Start email checker — polls hourly, pings owner on new mail
+    def email_notify(msg):
+        target = OWNER_ID or list(ALLOWED_IDS)[0]
+        send_message(f"📧 {msg}", chat_id=target)
+        print(f"[email -> {target}] {msg[:200]}")
+
+    email_checker = EmailChecker(send=email_notify, interval=3600)
+    email_checker.start()
 
     # Start from the latest update so we don't replay old messages
     try:
@@ -494,6 +506,7 @@ def main():
                 message_id = msg.get("message_id")
                 set_react_context(chat_id, message_id)
                 set_active_user(chat_id)
+                auth.set_active_user(chat_id)
                 heartbeat.notify_activity()
 
                 # Get/create this user's session and swap in their history
@@ -575,6 +588,7 @@ def main():
                     save_chat(sess["chat_id"], sess["title"], sess["messages"])
             reminders.stop()
             heartbeat.stop()
+            email_checker.stop()
             print("\nBridge stopped.")
             break
         except (socket.timeout, urllib.error.URLError):
