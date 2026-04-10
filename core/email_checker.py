@@ -99,9 +99,11 @@ class EmailChecker:
         self._stop = threading.Event()
         self._thread = None
         self._last_uid = 0
-        # Pending draft: {to, subject, body, from_label} — set when LLM drafts
-        # a reply. Bridge intercepts owner's "yes/no" to fire or cancel it.
-        self.pending_draft = None
+        # Pending drafts: list of {to, subject, body, from_label, uid} dicts —
+        # appended when the LLM drafts a reply. Bridge intercepts owner's "yes/no"
+        # to send or discard the most recently presented draft. Using a list so
+        # multiple drafts from simultaneous emails don't overwrite each other.
+        self.pending_drafts = []
 
     def _fetch_new_messages(self):
         """Return list of parsed message dicts newer than last_uid."""
@@ -259,15 +261,15 @@ class EmailChecker:
         llm_text = self._ask_llm_about_email(msg)
         summary, draft = self._split_summary_and_draft(llm_text)
 
-        # If we got a draft, store it as pending so the owner can one-shot approve
+        # If we got a draft, append it as pending so the owner can one-shot approve
         if draft and msg["from_addr"]:
-            self.pending_draft = {
+            self.pending_drafts.append({
                 "to": msg["from_addr"],
                 "subject": msg["subject"] if msg["subject"].lower().startswith("re:") else f"Re: {msg['subject'] or '(no subject)'}",
                 "body": draft,
                 "from_label": msg["from_name"] or msg["from_addr"],
                 "uid": msg["uid"],
-            }
+            })
 
         notification = self._format_notification(msg, summary, draft)
         self._notify(notification)
@@ -294,7 +296,14 @@ class EmailChecker:
         self._mark_read(msg["uid"])
 
     def clear_pending_draft(self):
-        self.pending_draft = None
+        """Remove the most recently presented pending draft."""
+        if self.pending_drafts:
+            self.pending_drafts.pop()
+
+    @property
+    def pending_draft(self):
+        """Backward-compatible property: returns the most recent pending draft, or None."""
+        return self.pending_drafts[-1] if self.pending_drafts else None
 
     def _pulse(self):
         while not self._stop.is_set():
