@@ -23,12 +23,16 @@ def get_browser_automation_tool():
     return {
         'name': 'browser_automation',
         'description': (
-            'Automates browser interactions using a headless browser. '
-            'Can navigate to URLs, fill in form fields, click buttons, submit forms, '
-            'and read page text or links. '
-            'Use get_text / get_links actions to inspect a page before guessing CSS selectors. '
-            'The result always includes a short page_text_snippet so you can see what loaded. '
-            'A final screenshot is saved to disk; use send_photo_telegram to forward it to the user.'
+            'Automates browser interactions using a headless browser (Playwright + Chromium). '
+            'Navigate, fill forms, click, read text/links, and screenshot.\n\n'
+            'HOW TO USE THIS TOOL WELL:\n'
+            '1. ALWAYS start with a get_text (no selector) to understand what page you are on. Never guess selectors blind.\n'
+            '2. Before filling any form, run inspect_forms. It returns every visible input/button/select with its real id, name, placeholder, aria-label, data-testid, text, AND a suggested_selector that is guaranteed to exist on the page. Use the suggested_selector verbatim in your fill/click actions — do NOT invent selectors like input[name="email"] and hope. This is especially critical on React/SPA sites where CSS classes are hashed and name attributes are often missing.\n'
+            '3. Sign in vs Sign up: these look almost identical. Before filling anything, read the page heading and primary button text from get_text / inspect_forms. If the form is not the one you want (e.g. you need to create an account but landed on a login form), look at the get_links output for a link like "Create account" / "Sign up" / "New here?" and click that FIRST. Do not just start filling fields and hope.\n'
+            '4. React / SPA pages: content renders AFTER the initial HTML loads, and clicks often do not trigger a page navigation — the page mutates in place. If an element is not there yet, add a wait_for_selector action targeting it, or a wait action of 1500-3000ms. After submitting a form on an SPA, use wait_for_selector for the next step rather than assuming it loaded. Re-run inspect_forms after the page mutates to get fresh selectors for the new state.\n'
+            '5. If a web task asks for an email address (signup, newsletter, form), use YOUR own email address (provided in the system prompt). Do not use the owner\'s email.\n'
+            '6. The result always includes page_text_snippet and final_url so you can verify where you ended up before claiming success. If final_url still looks like the form page after a submit, the submit probably failed — inspect and try again.\n'
+            '7. A final screenshot is saved to disk; use send_photo_telegram to forward it to the user.'
         ),
         'inputSchema': {
             'type': 'object',
@@ -48,10 +52,12 @@ def get_browser_automation_tool():
                                 'description': (
                                     'Action type. '
                                     'fill/click/select/wait/screenshot/scroll interact with the page. '
+                                    'wait_for_selector pauses until an element appears (essential for React/SPA pages after clicks). '
                                     'get_text returns visible text (whole page, or scoped to selector). '
-                                    'get_links returns all <a> tags with their text + href (including mailto:).'
+                                    'get_links returns all <a> tags with their text + href (including mailto:). '
+                                    'inspect_forms returns every visible input/button/select with its real attributes AND a suggested_selector — use this BEFORE filling anything on a React/SPA page so you stop guessing selectors.'
                                 ),
-                                'enum': ['fill', 'click', 'select', 'wait', 'screenshot', 'scroll', 'get_text', 'get_links']
+                                'enum': ['fill', 'click', 'select', 'wait', 'wait_for_selector', 'screenshot', 'scroll', 'get_text', 'get_links', 'inspect_forms']
                             },
                             'selector': {
                                 'type': 'string',
@@ -125,6 +131,76 @@ def _extract_links(page, selector=None):
         return []
 
 
+def _inspect_forms(page, selector=None):
+    """
+    Return structured info about interactive elements (inputs, textareas, selects,
+    buttons) with all addressable attributes AND a suggested_selector that is
+    guaranteed to exist on the page. Essential for React/SPA sites where CSS
+    classes are hashed and 'name' attributes are often absent.
+    """
+    js = r"""
+    (sel) => {
+        const root = sel ? document.querySelector(sel) : document;
+        if (!root) return [];
+        const nodes = root.querySelectorAll(
+            'input, textarea, select, button, [role="button"], [role="textbox"]'
+        );
+        const esc = (v) => String(v).replace(/'/g, "\\'");
+        const pick = (el) => {
+            // Priority order for a selector that uniquely (or usefully) targets el.
+            const testid = el.getAttribute('data-testid');
+            if (testid) return `[data-testid='${esc(testid)}']`;
+            if (el.id) return `#${CSS.escape(el.id)}`;
+            const name = el.getAttribute('name');
+            if (name) return `${el.tagName.toLowerCase()}[name='${esc(name)}']`;
+            const aria = el.getAttribute('aria-label');
+            if (aria) return `${el.tagName.toLowerCase()}[aria-label='${esc(aria)}']`;
+            const placeholder = el.getAttribute('placeholder');
+            if (placeholder) return `${el.tagName.toLowerCase()}[placeholder='${esc(placeholder)}']`;
+            // Buttons: prefer visible text
+            if (el.tagName === 'BUTTON' || el.getAttribute('role') === 'button') {
+                const txt = (el.innerText || el.textContent || '').trim();
+                if (txt) return `${el.tagName.toLowerCase()}:has-text('${esc(txt.slice(0, 40))}')`;
+            }
+            // Fallback: tag + type
+            const t = el.getAttribute('type');
+            return t ? `${el.tagName.toLowerCase()}[type='${esc(t)}']` : el.tagName.toLowerCase();
+        };
+        const out = [];
+        nodes.forEach((el) => {
+            // Skip hidden elements — they can't be interacted with anyway
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return;
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) return;
+
+            const entry = {
+                tag: el.tagName.toLowerCase(),
+                type: el.getAttribute('type') || null,
+                id: el.id || null,
+                name: el.getAttribute('name') || null,
+                placeholder: el.getAttribute('placeholder') || null,
+                aria_label: el.getAttribute('aria-label') || null,
+                data_testid: el.getAttribute('data-testid') || null,
+                text: ((el.innerText || el.textContent || '').trim() || null),
+                required: el.hasAttribute('required') || null,
+                suggested_selector: pick(el),
+            };
+            // Trim long text
+            if (entry.text && entry.text.length > 80) {
+                entry.text = entry.text.slice(0, 80) + '...';
+            }
+            out.push(entry);
+        });
+        return out;
+    }
+    """
+    try:
+        return page.evaluate(js, selector)
+    except Exception as e:
+        return [{'error': f'inspect_forms failed: {e}'}]
+
+
 def _extract_text(page, selector=None, limit=4000):
     """Return visible text for the whole page or a selector."""
     try:
@@ -167,7 +243,11 @@ def _browser_automation(inputs):
             page = context.new_page()
             page.set_default_timeout(overall_timeout)
 
-            # Navigate to the URL
+            # Navigate to the URL. Use domcontentloaded — networkidle is unreliable
+            # on modern sites (analytics, WebSockets, long-polling never settle)
+            # and caused the agent to get confused by mid-flight redirects.
+            # If a page needs extra hydration time, the LLM can add a wait or
+            # wait_for_selector action explicitly.
             page.goto(url, wait_until='domcontentloaded')
             results['page_title'] = page.title()
 
@@ -207,6 +287,13 @@ def _browser_automation(inputs):
                         page.wait_for_timeout(timeout)
                         action_result['status'] = 'waited'
 
+                    elif action_type == 'wait_for_selector':
+                        selector = action['selector']
+                        timeout = action.get('timeout', 10000)
+                        page.wait_for_selector(selector, timeout=timeout, state='visible')
+                        action_result['selector'] = selector
+                        action_result['status'] = 'selector_visible'
+
                     elif action_type == 'screenshot':
                         ss_name = action.get('value', f'screenshot_step_{i + 1}.png')
                         # Always anchor the filename inside screenshots/, even
@@ -234,6 +321,14 @@ def _browser_automation(inputs):
                         action_result['links'] = links
                         action_result['count'] = len(links)
                         action_result['status'] = 'links_extracted'
+
+                    elif action_type == 'inspect_forms':
+                        selector = action.get('selector')
+                        elements = _inspect_forms(page, selector=selector)
+                        action_result['selector'] = selector
+                        action_result['elements'] = elements
+                        action_result['count'] = len(elements)
+                        action_result['status'] = 'forms_inspected'
 
                 except Exception as e:
                     action_result['status'] = 'failed'

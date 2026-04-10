@@ -147,6 +147,17 @@ class Agent:
         # Build the tool name list for the system prompt
         tool_names = ", ".join(sorted(self.registry.tools.keys()))
 
+        # Lumi's own email account — surfaced so the LLM knows what to use
+        # when a web task asks for "an email address" (signups, newsletters, etc.)
+        lumi_email = os.getenv("LUMI_EMAIL_ADDRESS", "").strip()
+        identity_block = (
+            f"Your own email address: {lumi_email}\n"
+            "  When a web task (signup, newsletter, form) asks for an email, use YOUR address above — "
+            "do not ask the owner and do not use the owner's email. You own this inbox and can read replies via the email_* tools.\n\n"
+            if lumi_email
+            else ""
+        )
+
         # Conversation history
         self.messages = [
             {
@@ -157,6 +168,7 @@ class Agent:
                     "ONLY use the tools listed above. Never invent or guess tool names.\n\n"
                     f"Current working directory: {root}\n"
                     f"```\n{project_tree}\n```\n\n"
+                    f"{identity_block}"
                     "Rules:\n"
                     "- Prefer find_definition, find_usages, get_file_structure, search_symbols, find_imports, and get_call_graph for code questions. Use search_file_contents only for plain text searches.\n"
                     "- Use recall to check memory when the user asks about something you might have saved. When the user wants to add to or change something already saved, recall first to find it, then use update_memory instead of creating a duplicate.\n"
