@@ -24,6 +24,7 @@ load_dotenv()
 from agent import Agent
 from core import cli as cli_module
 from tools.comms.react import set_react_context
+from tools.memory.memory_tools import set_active_user
 from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat
 from core.cli import Spinner
 from core.heartbeat import Heartbeat
@@ -421,11 +422,16 @@ def main():
 
     agent = Agent(verbose=verbose, status_callback=telegram_status)
 
-    # Start reminders — notify all authorized users
+    # Start reminders — personal pings the creator, family pings everyone
     def notify_telegram(reminder):
-        for uid in ALLOWED_IDS:
-            send_message(f"🔔 Reminder: {reminder['content']}", chat_id=uid)
-        print(f"[reminder] {reminder['content']}")
+        target = reminder.get("chat_id")
+        if target:
+            send_message(f"🔔 Reminder: {reminder['content']}", chat_id=target)
+            print(f"[reminder -> {target}] {reminder['content']}")
+        else:
+            for uid in ALLOWED_IDS:
+                send_message(f"🔔 Family reminder: {reminder['content']}", chat_id=uid)
+            print(f"[family reminder] {reminder['content']}")
 
     reminders = ReminderChecker(interval=30, notify=notify_telegram)
     reminders.start()
@@ -487,6 +493,7 @@ def main():
                 user_name = msg.get("from", {}).get("first_name", "?")
                 message_id = msg.get("message_id")
                 set_react_context(chat_id, message_id)
+                set_active_user(chat_id)
                 heartbeat.notify_activity()
 
                 # Get/create this user's session and swap in their history

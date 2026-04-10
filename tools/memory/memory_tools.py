@@ -5,6 +5,15 @@ from core import memory_store
 from ollama_client import OllamaClient
 
 
+# Set by the bridge before each user message. None in CLI mode.
+_active_user = {"value": None}
+
+
+def set_active_user(chat_id):
+    """Called by the bridge to mark who's currently talking to the agent."""
+    _active_user["value"] = str(chat_id) if chat_id is not None else None
+
+
 def _parse_notify_at(value: str) -> str | None:
     """Use a focused LLM call to convert any time expression to ISO datetime.
     Returns a valid ISO string or None if parsing failed."""
@@ -66,6 +75,17 @@ def get_remember_tool():
                     "type": "string",
                     "description": "When to notify, in natural language (e.g. '5 minutes', 'tomorrow at 9am', 'next Friday at 2pm')",
                 },
+                "scope": {
+                    "type": "string",
+                    "enum": ["me", "everyone"],
+                    "description": (
+                        "Who this memory is for. Default 'me' (personal — only the "
+                        "requester sees/gets it). Use 'everyone' ONLY when the user "
+                        "explicitly asks for a family/group/household reminder — e.g. "
+                        "'remind us', 'tell everyone', 'family reminder', 'remind the "
+                        "whole house'. When in doubt, use 'me'."
+                    ),
+                },
             },
             "required": ["content"],
         },
@@ -77,6 +97,7 @@ def _remember(inputs):
     content = inputs["content"]
     memory_type = inputs.get("type", "fact")
     raw_notify = inputs.get("notify_at", "")
+    scope = inputs.get("scope", "me")
 
     # For reminders, parse and validate the time
     if memory_type == "reminder" and raw_notify:
@@ -89,11 +110,24 @@ def _remember(inputs):
     else:
         notify_at = None
 
-    row_id = memory_store.save(content, memory_type, notify_at)
-    result = {"saved": True, "id": row_id, "type": memory_type}
+    # Resolve scope → chat_id. 'everyone' always broadcasts (chat_id=None).
+    # 'me' stores the caller's id; in CLI mode (no active user) it stays None.
+    active = _active_user["value"]
+    chat_id = None if scope == "everyone" else active
+    created_by = active
+
+    row_id = memory_store.save(
+        content, memory_type, notify_at, chat_id=chat_id, created_by=created_by
+    )
+    result = {
+        "saved": True,
+        "id": row_id,
+        "type": memory_type,
+        "scope": "family" if chat_id is None else "personal",
+    }
     if notify_at:
         result["notify_at"] = notify_at
-        print(f"  [reminder scheduled] {notify_at}")
+        print(f"  [reminder scheduled] {notify_at} ({result['scope']})")
     return result
 
 
@@ -121,11 +155,25 @@ def get_recall_tool():
 def _recall(inputs):
     query = inputs.get("query", "").strip()
     limit = int(inputs.get("limit", 20))
+    active = _active_user["value"]
     if query:
-        results = memory_store.search(query, limit)
+        results = memory_store.search(query, limit, active_user=active)
     else:
-        results = memory_store.get_recent(limit)
+        results = memory_store.get_recent(limit, active_user=active)
     return {"count": len(results), "memories": results}
+
+
+def _check_owner(memory_id):
+    """Return (memory, error_dict_or_None). Blocks edits of other users' memories."""
+    memory = memory_store.get_by_id(memory_id)
+    if not memory:
+        return None, {"error": f"Memory {memory_id} not found"}
+    active = _active_user["value"]
+    creator = memory.get("created_by")
+    # CLI (no active user) and legacy rows (no creator) bypass the check.
+    if active and creator and str(creator) != str(active):
+        return memory, {"error": "You can only change memories you created."}
+    return memory, None
 
 
 def get_update_memory_tool():
@@ -158,6 +206,10 @@ def _update_memory(inputs):
     memory_id = int(inputs["id"])
     content = inputs["content"]
     raw_notify = inputs.get("notify_at", "")
+
+    _, err = _check_owner(memory_id)
+    if err:
+        return {"updated": False, **err}
 
     notify_at = None
     if raw_notify:
@@ -192,5 +244,8 @@ def get_forget_tool():
 
 def _forget(inputs):
     memory_id = int(inputs["id"])
+    _, err = _check_owner(memory_id)
+    if err:
+        return {"deleted": False, **err}
     memory_store.delete(memory_id)
     return {"deleted": True, "id": memory_id}
