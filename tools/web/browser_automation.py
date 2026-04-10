@@ -1,10 +1,12 @@
 """
 Browser automation tool using Playwright.
 Supports navigating to URLs, filling form fields, clicking buttons,
-and signing up for newsletters / submitting forms.
+reading page text/links, and submitting forms.
 """
 
 import os
+from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 
@@ -13,8 +15,11 @@ def get_browser_automation_tool():
         'name': 'browser_automation',
         'description': (
             'Automates browser interactions using a headless browser. '
-            'Can navigate to URLs, fill in form fields, click buttons, and submit forms. '
-            'Useful for signing up for newsletters, filling out contact forms, etc.'
+            'Can navigate to URLs, fill in form fields, click buttons, submit forms, '
+            'and read page text or links. '
+            'Use get_text / get_links actions to inspect a page before guessing CSS selectors. '
+            'The result always includes a short page_text_snippet so you can see what loaded. '
+            'A final screenshot is saved to disk; use send_photo_telegram to forward it to the user.'
         ),
         'inputSchema': {
             'type': 'object',
@@ -31,12 +36,17 @@ def get_browser_automation_tool():
                         'properties': {
                             'type': {
                                 'type': 'string',
-                                'description': 'Action type: fill, click, select, wait, screenshot, scroll',
-                                'enum': ['fill', 'click', 'select', 'wait', 'screenshot', 'scroll']
+                                'description': (
+                                    'Action type. '
+                                    'fill/click/select/wait/screenshot/scroll interact with the page. '
+                                    'get_text returns visible text (whole page, or scoped to selector). '
+                                    'get_links returns all <a> tags with their text + href (including mailto:).'
+                                ),
+                                'enum': ['fill', 'click', 'select', 'wait', 'screenshot', 'scroll', 'get_text', 'get_links']
                             },
                             'selector': {
                                 'type': 'string',
-                                'description': 'CSS selector for the element (e.g. input[name="email"], #submit-btn, button:has-text("Subscribe"))'
+                                'description': 'CSS selector for the element (e.g. input[name="email"], #submit-btn, button:has-text("Subscribe")). Optional for get_text/get_links (omit to scope to whole page).'
                             },
                             'value': {
                                 'type': 'string',
@@ -67,6 +77,62 @@ def get_browser_automation_tool():
         },
         'execute': _browser_automation
     }
+
+
+def _page_text_snippet(page, limit=1500):
+    """Grab a compact snippet of visible page text so the LLM has context."""
+    try:
+        text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    except Exception:
+        return ''
+    if not text:
+        return ''
+    # Collapse whitespace to keep the snippet short
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    compact = '\n'.join(lines)
+    if len(compact) > limit:
+        compact = compact[:limit] + '...'
+    return compact
+
+
+def _extract_links(page, selector=None):
+    """Return all <a> tags as {text, href}. If selector given, scope to that container."""
+    js = """
+    (sel) => {
+        const root = sel ? document.querySelector(sel) : document;
+        if (!root) return [];
+        const anchors = root.querySelectorAll('a[href]');
+        const out = [];
+        anchors.forEach(a => {
+            const text = (a.innerText || a.textContent || '').trim();
+            out.push({text: text.slice(0, 200), href: a.href});
+        });
+        return out;
+    }
+    """
+    try:
+        return page.evaluate(js, selector)
+    except Exception:
+        return []
+
+
+def _extract_text(page, selector=None, limit=4000):
+    """Return visible text for the whole page or a selector."""
+    try:
+        if selector:
+            text = page.evaluate(
+                "(sel) => { const el = document.querySelector(sel); return el ? el.innerText : ''; }",
+                selector,
+            )
+        else:
+            text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    except Exception as e:
+        return f'[error extracting text: {e}]'
+    if not text:
+        return ''
+    if len(text) > limit:
+        text = text[:limit] + '...'
+    return text
 
 
 def _browser_automation(inputs):
@@ -133,7 +199,8 @@ def _browser_automation(inputs):
                         action_result['status'] = 'waited'
 
                     elif action_type == 'screenshot':
-                        ss_path = action.get('value', f'screenshot_step_{i + 1}.png')
+                        ss_name = action.get('value', f'screenshot_step_{i + 1}.png')
+                        ss_path = str(Path(ss_name).resolve())
                         page.screenshot(path=ss_path)
                         action_result['screenshot_path'] = ss_path
                         action_result['status'] = 'screenshot_taken'
@@ -141,6 +208,21 @@ def _browser_automation(inputs):
                     elif action_type == 'scroll':
                         page.keyboard.press('PageDown')
                         action_result['status'] = 'scrolled'
+
+                    elif action_type == 'get_text':
+                        selector = action.get('selector')
+                        text = _extract_text(page, selector=selector)
+                        action_result['selector'] = selector
+                        action_result['text'] = text
+                        action_result['status'] = 'text_extracted'
+
+                    elif action_type == 'get_links':
+                        selector = action.get('selector')
+                        links = _extract_links(page, selector=selector)
+                        action_result['selector'] = selector
+                        action_result['links'] = links
+                        action_result['count'] = len(links)
+                        action_result['status'] = 'links_extracted'
 
                 except Exception as e:
                     action_result['status'] = 'failed'
@@ -154,9 +236,12 @@ def _browser_automation(inputs):
             # Wait a moment for any final JS to run
             page.wait_for_timeout(1000)
 
+            # Include a short page-text snippet so the LLM isn't flying blind
+            results['page_text_snippet'] = _page_text_snippet(page)
+
             # Take final screenshot if requested
             if take_screenshot:
-                final_screenshot = 'browser_automation_result.png'
+                final_screenshot = str(Path('browser_automation_result.png').resolve())
                 page.screenshot(path=final_screenshot, full_page=True)
                 results['screenshot_path'] = final_screenshot
 

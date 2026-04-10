@@ -112,10 +112,15 @@ class Agent:
     ROUND_DEADLINE = 120        # seconds per LLM call
     ASK_LLM_TIMEOUT = 300      # overall wall-clock limit (5 min)
 
-    def __init__(self, verbose=False, status_callback=None):
+    def __init__(self, verbose=False, status_callback=None, check_interrupt=None):
         self.verbose = verbose
         # Called with (message_text) to send progress updates mid-work
         self.status_callback = status_callback
+        # Called between tool rounds to check if the user wants to stop.
+        # Should return True if the run should be interrupted.
+        self.check_interrupt = check_interrupt
+        # Set to True to abort the current ask_llm run on the next check.
+        self.interrupt_requested = False
 
         # Initialize storage manager first (needed by code index)
         self.storage = StorageManager(get_repo_root())
@@ -296,15 +301,39 @@ class Agent:
         tool_inputs["confirm"] = True
         return self.execute_tool(tool_name, tool_inputs)
 
+    def _check_interrupt(self):
+        """Returns True if the current run should abort. Also polls the callback."""
+        if self.check_interrupt:
+            try:
+                if self.check_interrupt():
+                    self.interrupt_requested = True
+            except Exception:
+                pass
+        return self.interrupt_requested
+
+    def _interrupt_response(self):
+        """Produce the stop response and reset the flag."""
+        self.interrupt_requested = False
+        stop_msg = "Stopped."
+        self.messages.append({"role": "assistant", "content": stop_msg})
+        return {"message": {"role": "assistant", "content": stop_msg}}
+
     def ask_llm(self, prompt):
         self.messages.append({"role": "user", "content": prompt})
         self._trim_history()
+
+        # Clear any stale interrupt from a previous run
+        self.interrupt_requested = False
 
         tools = self.get_tools_for_llm()
         start_time = time.monotonic()
         last_tool_key = None
 
         for round_num in range(self.MAX_TOOL_ROUNDS + 1):
+            # User-requested stop
+            if self._check_interrupt():
+                return self._interrupt_response()
+
             # Wall-clock guard
             elapsed = time.monotonic() - start_time
             if elapsed >= self.ASK_LLM_TIMEOUT:
@@ -381,6 +410,11 @@ class Agent:
                 return response
 
             for tool_call in tool_calls:
+                # Check for stop before every tool call so long sequences
+                # (like a multi-step browser automation) can be aborted mid-flight.
+                if self._check_interrupt():
+                    return self._interrupt_response()
+
                 function_data = tool_call.get("function", {})
                 tool_name = function_data.get("name")
                 tool_inputs = function_data.get("arguments", {})

@@ -72,6 +72,11 @@ _active_chat_id = {"value": None}
 # Global offset tracker
 _poll_offset = {"value": None}
 
+# Buffer of updates peeked during tool runs — drained by main loop.
+# When we peek for /stop mid-run, any non-/stop messages land here so they
+# aren't lost.
+_pending_updates = []
+
 # Disable the spinner — it's just noise in bridge mode
 Spinner.start = lambda self: self
 Spinner.stop = lambda self: None
@@ -133,6 +138,49 @@ def poll_for_reply(chat_id=None):
                     return text, _poll_offset["value"]
         except (socket.timeout, urllib.error.URLError):
             continue
+
+
+def check_for_stop():
+    """Non-blocking peek at Telegram updates for a /stop from the active user.
+
+    Called by the agent between tool rounds. Any non-/stop updates seen
+    during the peek are buffered in _pending_updates so the main poll loop
+    can process them normally on the next iteration.
+
+    Returns True if a /stop from the currently-active user was found.
+    """
+    chat_id = _active_chat_id["value"]
+    if not chat_id:
+        return False
+
+    params = {"timeout": 0}
+    if _poll_offset["value"] is not None:
+        params["offset"] = _poll_offset["value"]
+
+    try:
+        updates = telegram_api("getUpdates", params).get("result", [])
+    except Exception:
+        return False
+
+    if not updates:
+        return False
+
+    found_stop = False
+    for update in updates:
+        _poll_offset["value"] = update["update_id"] + 1
+        msg = update.get("message", {})
+        msg_chat_id = str(msg.get("chat", {}).get("id", ""))
+        text = msg.get("text", "").strip()
+        if text.lower() == "/stop" and msg_chat_id == str(chat_id):
+            found_stop = True
+            try:
+                send_message("Stopped.", chat_id=msg_chat_id)
+            except Exception:
+                pass
+        else:
+            # Leave this for the main loop to handle
+            _pending_updates.append(update)
+    return found_stop
 
 
 def telegram_confirm(prompt):
@@ -265,6 +313,13 @@ def handle_telegram_command(text, agent, session, chat_id):
     """Handle /commands sent via Telegram. Returns True if handled."""
     cmd = text.strip().lower()
 
+    if cmd == "/stop":
+        # If Lumi is actively running, the check_for_stop peek inside
+        # agent.ask_llm catches /stop before it ever gets here. Reaching this
+        # branch means there was nothing to stop.
+        send_message("Nothing to stop — I wasn't working on anything.")
+        return True
+
     if cmd == "/tools":
         current = _show_tools.get(str(chat_id), False)
         _show_tools[str(chat_id)] = not current
@@ -277,6 +332,7 @@ def handle_telegram_command(text, agent, session, chat_id):
             "Commands:\n",
             "/chats - list & resume saved conversations",
             "/new - start a fresh conversation",
+            "/stop - interrupt Lumi mid-task",
             "/tools - toggle tool call visibility",
             "/status - show model, storage, index info",
             "/help - this message",
@@ -423,7 +479,11 @@ def main():
             except Exception:
                 pass
 
-    agent = Agent(verbose=verbose, status_callback=telegram_status)
+    agent = Agent(
+        verbose=verbose,
+        status_callback=telegram_status,
+        check_interrupt=check_for_stop,
+    )
 
     # Start reminders — personal pings the creator, family pings everyone
     def notify_telegram(reminder):
@@ -545,14 +605,24 @@ def main():
 
     while True:
         try:
-            params = {"timeout": 30}
-            if _poll_offset["value"] is not None:
-                params["offset"] = _poll_offset["value"]
-
-            updates = telegram_api("getUpdates", params)
+            # Drain any updates that were peeked mid-run (by check_for_stop)
+            # before making a fresh network call.
+            if _pending_updates:
+                buffered = _pending_updates[:]
+                _pending_updates.clear()
+                updates = {"result": buffered}
+            else:
+                params = {"timeout": 30}
+                if _poll_offset["value"] is not None:
+                    params["offset"] = _poll_offset["value"]
+                updates = telegram_api("getUpdates", params)
 
             for update in updates.get("result", []):
-                _poll_offset["value"] = update["update_id"] + 1
+                # Never downgrade the offset — check_for_stop may have already
+                # advanced it past updates we're now draining from the buffer.
+                new_offset = update["update_id"] + 1
+                if _poll_offset["value"] is None or new_offset > _poll_offset["value"]:
+                    _poll_offset["value"] = new_offset
                 msg = update.get("message", {})
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 text = msg.get("text", "").strip()
