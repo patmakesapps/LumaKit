@@ -13,3 +13,4 @@ memory/*.db
 .claude/
 .lumakit/
 screenshots/
+lumi/

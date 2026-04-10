@@ -51,13 +51,16 @@ def get_browser_automation_tool():
                                 'type': 'string',
                                 'description': (
                                     'Action type. '
-                                    'fill/click/select/wait/screenshot/scroll interact with the page. '
+                                    'fill sets a field value directly (fast, but may not trigger React state updates). '
+                                    'type simulates keystrokes character-by-character (slower, but works reliably with React/SPA controlled components). '
+                                    'Use type instead of fill when a form submission seems to ignore filled values. '
+                                    'click/select/wait/screenshot/scroll interact with the page. '
                                     'wait_for_selector pauses until an element appears (essential for React/SPA pages after clicks). '
                                     'get_text returns visible text (whole page, or scoped to selector). '
                                     'get_links returns all <a> tags with their text + href (including mailto:). '
                                     'inspect_forms returns every visible input/button/select with its real attributes AND a suggested_selector — use this BEFORE filling anything on a React/SPA page so you stop guessing selectors.'
                                 ),
-                                'enum': ['fill', 'click', 'select', 'wait', 'wait_for_selector', 'screenshot', 'scroll', 'get_text', 'get_links', 'inspect_forms']
+                                'enum': ['fill', 'type', 'click', 'select', 'wait', 'wait_for_selector', 'screenshot', 'scroll', 'get_text', 'get_links', 'inspect_forms']
                             },
                             'selector': {
                                 'type': 'string',
@@ -65,7 +68,7 @@ def get_browser_automation_tool():
                             },
                             'value': {
                                 'type': 'string',
-                                'description': 'Value to fill in (for fill/select actions)'
+                                'description': 'Value to fill in or type (for fill/type/select actions)'
                             },
                             'timeout': {
                                 'type': 'number',
@@ -264,6 +267,16 @@ def _browser_automation(inputs):
                         action_result['selector'] = selector
                         action_result['value'] = '***'  # don't log sensitive values
                         action_result['status'] = 'filled'
+
+                    elif action_type == 'type':
+                        selector = action['selector']
+                        value = action['value']
+                        # Click to focus the field first, then type character-by-character
+                        page.click(selector)
+                        page.keyboard.type(value, delay=50)
+                        action_result['selector'] = selector
+                        action_result['value'] = '***'  # don't log sensitive values
+                        action_result['status'] = 'typed'
 
                     elif action_type == 'click':
                         selector = action['selector']
