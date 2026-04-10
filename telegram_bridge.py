@@ -448,14 +448,70 @@ def main():
     heartbeat = Heartbeat(send=heartbeat_send, interval=900, cooldown=3600)
     heartbeat.start()
 
-    # Start email checker — polls hourly, pings owner on new mail
+    # Start email checker — polls every 60s, triages new mail via LLM,
+    # notifies owner on Telegram, and injects summaries into owner's session
     def email_notify(msg):
         target = OWNER_ID or list(ALLOWED_IDS)[0]
-        send_message(f"📧 {msg}", chat_id=target)
+        send_message(msg, chat_id=target)
         print(f"[email -> {target}] {msg[:200]}")
 
-    email_checker = EmailChecker(send=email_notify, interval=3600)
+    def email_ask_llm(prompt):
+        """Side-channel LLM call that doesn't touch any user's session."""
+        from ollama_client import OllamaClient
+        client = OllamaClient(fallback_model=agent.fallback_model)
+        response = client.chat(
+            model=agent.model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            deadline=90,
+        )
+        return response.get("message", {}).get("content", "").strip()
+
+    def email_inject_session(text):
+        """Append a synthetic assistant message to the owner's session
+        so 'reply to that' references work later."""
+        target = OWNER_ID or list(ALLOWED_IDS)[0]
+        if not target:
+            return
+        session = _get_session(target)
+        if session["messages"] is None:
+            session["messages"] = [agent.messages[0].copy()]
+        session["messages"].append({"role": "assistant", "content": text})
+
+    email_checker = EmailChecker(
+        notify_owner=email_notify,
+        ask_llm=email_ask_llm,
+        inject_session=email_inject_session,
+        interval=60,
+    )
     email_checker.start()
+
+    _AFFIRM = {"yes", "y", "yep", "yeah", "send", "send it", "do it", "ok", "okay", "sure"}
+    _DENY = {"no", "n", "nah", "skip", "cancel", "nope", "don't", "dont"}
+
+    def _handle_pending_draft(text, chat_id):
+        """If a draft is pending approval, intercept the owner's yes/no.
+        Returns True if the message was consumed."""
+        draft = email_checker.pending_draft
+        if not draft:
+            return False
+        if str(chat_id) != str(OWNER_ID):
+            return False
+        normalized = text.strip().lower()
+        if normalized in _AFFIRM:
+            from tools.comms.email import send_preapproved
+            result = send_preapproved(draft["to"], draft["subject"], draft["body"])
+            email_checker.clear_pending_draft()
+            if result.get("sent"):
+                send_message(f"✅ Sent to {draft['from_label']}.", chat_id=chat_id)
+            else:
+                send_message(f"❌ Couldn't send: {result.get('error', 'unknown error')}", chat_id=chat_id)
+            return True
+        if normalized in _DENY:
+            email_checker.clear_pending_draft()
+            send_message("👍 Skipped. Draft discarded.", chat_id=chat_id)
+            return True
+        return False
 
     # Start from the latest update so we don't replay old messages
     try:
@@ -547,6 +603,10 @@ def main():
                     continue
 
                 print(f"[{user_name}] {text}")
+
+                # Intercept yes/no for a pending email draft before the agent sees it
+                if _handle_pending_draft(text, chat_id):
+                    continue
 
                 # Handle slash commands
                 if text.startswith("/"):

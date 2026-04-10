@@ -9,6 +9,10 @@ LumaKit is a local CLI agent that talks to an Ollama model and gives it access t
 - **Tool-calling agent** — loads tools automatically from `tools/` and lets the model call them in multi-round loops
 - **CLI interface** — interactive chat with slash commands, clipboard image pasting, chat persistence, and storage management
 - **Telegram bridge** — chat with LumaKit from your phone; supports multiple authorized users, photo/vision analysis, and admin controls
+- **Autonomous email** — give the agent its own Gmail account; it polls every 60s, drafts replies for the owner, and requires one-tap approval before sending (owner-only, with codebase-leak filter, rate limiting, and URL stripping). See [docs/gmail_setup.md](docs/gmail_setup.md).
+- **Family & personal reminders** — per-user reminders plus household-wide broadcasts. See [docs/family_alerts.md](docs/family_alerts.md).
+- **Screenshot tool** — the agent can grab the current screen and push it to the owner on Telegram
+- **Heartbeat** — background check-ins from Lumi when the owner has been quiet
 - **Code intelligence** — built-in code index using tree-sitter for symbol lookup, definition finding, usage search, and call graphs
 - **Memory & reminders** — persistent memory store and a background reminder system
 - **Context management** — automatic conversation summarization to keep context lean
@@ -43,6 +47,10 @@ Copy `.env.example` to `.env` and set the values you want to use.
 | `SERPAPI_KEY` | Optional — enables premium web search |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather (for Telegram bridge) |
 | `TELEGRAM_ALLOWED_IDS` | Comma-separated Telegram chat IDs (first = owner/admin) |
+| `LUMI_EMAIL_ADDRESS` | Lumi's own Gmail address (for the autonomous email loop) |
+| `LUMI_EMAIL_PASSWORD` | Gmail app password (see [docs/gmail_setup.md](docs/gmail_setup.md)) |
+| `LUMI_EMAIL_SIGNATURE` | Signature appended to every outbound email |
+| `LUMI_EMAIL_MAX_PER_HOUR` | Rate limit on outbound email sends (default 10) |
 
 Recommended model: `glm-5:cloud`
 
@@ -111,11 +119,17 @@ core/                   Internal modules
 
 tools/
   code_intel/           Code index (tree-sitter) — symbol table, parsers, cache
-  comms/                Communication tools (send_telegram)
+  comms/                Communication tools (telegram, email, screenshot, reactions)
   memory/               Memory and reminder tools (save, recall, remind)
   repo/                 File and git operations (read, write, edit, delete, search, diff, git)
   runtime/              Shell, Python, clipboard, system info, storage tools
   web/                  HTTP fetch and web search
+
+core/
+  auth.py               Owner gating (used by email tools)
+  email_checker.py      Background IMAP poller + LLM triage + one-shot draft approval
+  email_filter.py       URL stripper, codebase-leak scanner, rate limiter, audit log
+  heartbeat.py          Periodic owner check-ins when chat has been idle
 ```
 
 ## Adding Tools

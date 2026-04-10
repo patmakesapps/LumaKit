@@ -4,6 +4,20 @@ Owner-only: all tools check core.auth.is_owner_active() and refuse
 unless the current Telegram user is the owner. Uses SMTP over SSL for
 sending and IMAP over SSL for reading.
 
+Safety layers (all outbound):
+  1. Owner gate
+  2. Codebase-leak scanner (scan_for_leaks)
+  3. Rate limit (10/hour default, check_rate_limit)
+  4. Interactive confirmation (cli.confirm shows full draft on Telegram)
+  5. Signature applied automatically
+  6. Audit log entry (.lumakit/sent_emails.log)
+
+Safety layers (all inbound):
+  1. Owner gate
+  2. URL stripping — HTML <a href>/<img>/<script>/<style> obliterated,
+     plain-text URLs replaced with [link]. Links returned separately for
+     the owner, never visible to the LLM.
+
 Config (.env):
     LUMI_EMAIL_ADDRESS       — Lumi's email address
     LUMI_EMAIL_PASSWORD      — app password (Gmail) or account password
@@ -11,6 +25,8 @@ Config (.env):
     LUMI_EMAIL_SMTP_PORT     — default: 465
     LUMI_EMAIL_IMAP_HOST     — default: imap.gmail.com
     LUMI_EMAIL_IMAP_PORT     — default: 993
+    LUMI_EMAIL_SIGNATURE     — appended to every outbound body
+    LUMI_EMAIL_MAX_PER_HOUR  — rate limit on outbound sends (default 10)
 """
 
 import email
@@ -19,9 +35,17 @@ import os
 import smtplib
 import ssl
 from email.message import EmailMessage
-from email.utils import parseaddr, parsedate_to_datetime
+from email.utils import parseaddr
 
-from core import auth
+from core import auth, cli
+from core.email_filter import (
+    apply_signature,
+    audit_log,
+    check_rate_limit,
+    record_send,
+    scan_for_leaks,
+    strip_urls,
+)
 
 
 def _owner_only_error():
@@ -45,19 +69,135 @@ def _require_config(cfg):
     return None
 
 
+# ---------- send pipeline (shared by send and reply) ----------
+
+
+def send_preapproved(to, subject, body):
+    """Send an email that has already been approved by the owner through another UI
+    (e.g. the EmailChecker pending-draft notification). Still runs leak scan,
+    rate limit, signature, and audit log — skips only the interactive confirm.
+
+    Returns a result dict the same shape as the tool executes.
+    """
+    cfg = _config()
+    err = _require_config(cfg)
+    if err:
+        return err
+
+    # 1. Leak scan
+    leaks = scan_for_leaks(subject, body)
+    if leaks:
+        reasons = "; ".join(f"{label}: {match!r}" for label, match in leaks)
+        audit_log(to, subject, body, approved=False, error=f"leak scan tripped: {reasons}")
+        return {"error": f"Blocked by codebase-leak filter. Tripped: {reasons}"}
+
+    # 2. Rate limit
+    allowed, remaining = check_rate_limit()
+    if not allowed:
+        audit_log(to, subject, body, approved=False, error="rate limit exceeded")
+        return {"error": f"Rate limit: hit max emails per hour ({os.getenv('LUMI_EMAIL_MAX_PER_HOUR', '10')})."}
+
+    # 3. Signature
+    final_body = apply_signature(body)
+
+    # 4. Build + send
+    msg = EmailMessage()
+    msg["From"] = cfg["address"]
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(final_body)
+
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], context=context, timeout=30) as smtp:
+            smtp.login(cfg["address"], cfg["password"])
+            smtp.send_message(msg)
+    except Exception as e:
+        audit_log(to, subject, final_body, approved=True, error=f"SMTP: {e}")
+        return {"error": f"SMTP error: {e}"}
+
+    record_send()
+    audit_log(to, subject, final_body, approved=True)
+    return {"sent": True, "to": to, "subject": subject, "remaining": remaining - 1}
+
+
+def _safe_send(cfg, msg_obj, to_display, subject, body):
+    """Run the full safety pipeline then send via SMTP.
+
+    Returns a tool-result dict. Handles scan, rate limit, confirm, signature,
+    audit, and actual SMTP delivery.
+    """
+    # 1. Codebase leak scan
+    leaks = scan_for_leaks(subject, body)
+    if leaks:
+        reasons = "; ".join(f"{label}: {match!r}" for label, match in leaks)
+        audit_log(to_display, subject, body, approved=False, error=f"leak scan tripped: {reasons}")
+        return {
+            "error": (
+                "Blocked by codebase-leak filter. The draft contained terms that "
+                "must never appear in outbound email. Rewrite it with natural, "
+                f"non-technical content. Tripped: {reasons}"
+            )
+        }
+
+    # 2. Rate limit
+    allowed, remaining = check_rate_limit()
+    if not allowed:
+        audit_log(to_display, subject, body, approved=False, error="rate limit exceeded")
+        return {"error": f"Rate limit: hit max emails per hour ({os.getenv('LUMI_EMAIL_MAX_PER_HOUR', '10')}). Try later."}
+
+    # 3. Apply signature BEFORE showing the draft, so owner sees what will actually send
+    final_body = apply_signature(body)
+
+    # 4. Owner confirmation — shows full draft, owner says y/n on Telegram
+    prompt = (
+        "Ready to send this email?\n"
+        f"To: {to_display}\n"
+        f"Subject: {subject}\n"
+        "─────────\n"
+        f"{final_body}\n"
+        "─────────\n"
+        f"(Sends remaining this hour: {remaining - 1})"
+    )
+    if not cli.confirm(prompt):
+        audit_log(to_display, subject, final_body, approved=False, error="owner declined")
+        return {"sent": False, "declined": True, "message": "Owner declined to send."}
+
+    # 5. Update the message body to the signed version
+    msg_obj.set_content(final_body)
+
+    # 6. Send
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], context=context, timeout=30) as smtp:
+            smtp.login(cfg["address"], cfg["password"])
+            smtp.send_message(msg_obj)
+    except Exception as e:
+        audit_log(to_display, subject, final_body, approved=True, error=f"SMTP: {e}")
+        return {"error": f"SMTP error: {e}"}
+
+    record_send()
+    audit_log(to_display, subject, final_body, approved=True)
+    return {"sent": True, "to": to_display, "subject": subject}
+
+
 # ---------- send ----------
 
 
 def get_email_send_tool():
     return {
         "name": "email_send",
-        "description": "Sends an email from Lumi's own email account. Owner-only.",
+        "description": (
+            "Sends an email from Lumi's email account. Owner-only. "
+            "Requires owner approval via Telegram before sending. "
+            "Never include source code, file paths, or internal details in the body."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "to": {"type": "string", "description": "Recipient email address (comma-separated for multiple)"},
                 "subject": {"type": "string", "description": "Email subject"},
-                "body": {"type": "string", "description": "Email body (plain text)"},
+                "body": {"type": "string", "description": "Email body (plain text, natural human content only)"},
                 "cc": {"type": "string", "description": "Optional CC addresses (comma-separated)"},
             },
             "required": ["to", "subject", "body"],
@@ -81,16 +221,10 @@ def _email_send(inputs):
     msg["Subject"] = inputs["subject"]
     if inputs.get("cc"):
         msg["Cc"] = inputs["cc"]
+    # Body gets set inside _safe_send after signature applied
     msg.set_content(inputs["body"])
 
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], context=context, timeout=30) as smtp:
-            smtp.login(cfg["address"], cfg["password"])
-            smtp.send_message(msg)
-        return {"sent": True, "to": inputs["to"], "subject": inputs["subject"]}
-    except Exception as e:
-        return {"error": f"SMTP error: {e}"}
+    return _safe_send(cfg, msg, inputs["to"], inputs["subject"], inputs["body"])
 
 
 # ---------- inbox list ----------
@@ -99,7 +233,7 @@ def _email_send(inputs):
 def get_email_check_inbox_tool():
     return {
         "name": "email_check_inbox",
-        "description": "Lists recent emails from Lumi's inbox. Owner-only.",
+        "description": "Lists recent emails (metadata only — no body or URLs). Owner-only.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -163,7 +297,11 @@ def _email_check_inbox(inputs):
 def get_email_read_tool():
     return {
         "name": "email_read",
-        "description": "Reads the full body of a specific email by id from Lumi's inbox. Owner-only.",
+        "description": (
+            "Reads the body of an email by id. All URLs are stripped before return — "
+            "you will only see [link] placeholders. Do not ask the owner for the URL. "
+            "Owner-only."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -176,27 +314,45 @@ def get_email_read_tool():
 
 
 def _extract_body(msg):
-    """Pull plain text from an email message (falls back to html text if needed)."""
+    """Pull text from an email. Returns (text, is_html)."""
     if msg.is_multipart():
+        # Prefer plain text
         for part in msg.walk():
             ctype = part.get_content_type()
             disp = str(part.get("Content-Disposition", ""))
             if ctype == "text/plain" and "attachment" not in disp:
                 try:
-                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="replace")
+                    return (
+                        part.get_payload(decode=True).decode(
+                            part.get_content_charset() or "utf-8", errors="replace"
+                        ),
+                        False,
+                    )
                 except Exception:
                     continue
+        # Fall back to HTML
         for part in msg.walk():
             if part.get_content_type() == "text/html":
                 try:
-                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="replace")
+                    return (
+                        part.get_payload(decode=True).decode(
+                            part.get_content_charset() or "utf-8", errors="replace"
+                        ),
+                        True,
+                    )
                 except Exception:
                     continue
-        return ""
+        return "", False
     try:
-        return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", errors="replace")
+        ctype = msg.get_content_type()
+        return (
+            msg.get_payload(decode=True).decode(
+                msg.get_content_charset() or "utf-8", errors="replace"
+            ),
+            ctype == "text/html",
+        )
     except Exception:
-        return str(msg.get_payload())
+        return str(msg.get_payload()), False
 
 
 def _email_read(inputs):
@@ -218,13 +374,21 @@ def _email_read(inputs):
                 return {"error": f"Could not fetch message {msg_id}"}
             parsed = email.message_from_bytes(msg_data[0][1])
             from_name, from_addr = parseaddr(parsed.get("From", ""))
+            raw_body, is_html = _extract_body(parsed)
+            sanitized_body, links = strip_urls(raw_body, is_html=is_html)
             return {
                 "id": msg_id,
                 "from": f"{from_name} <{from_addr}>" if from_name else from_addr,
                 "to": parsed.get("To", ""),
                 "subject": parsed.get("Subject", ""),
                 "date": parsed.get("Date", ""),
-                "body": _extract_body(parsed)[:10000],  # cap at 10k chars
+                "body": sanitized_body[:10000],  # cap at 10k chars
+                "link_count": len(links),
+                "note": (
+                    "All URLs have been stripped for safety. "
+                    "If you need to discuss a link, tell the owner the [link] was there — "
+                    "the owner sees the full URLs separately."
+                ) if links else "",
             }
     except Exception as e:
         return {"error": f"IMAP error: {e}"}
@@ -236,12 +400,16 @@ def _email_read(inputs):
 def get_email_reply_tool():
     return {
         "name": "email_reply",
-        "description": "Replies to an email by id. Owner-only.",
+        "description": (
+            "Replies to an email by id. Owner-only. "
+            "Requires owner approval via Telegram before sending. "
+            "Never include source code, file paths, or internal details."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": "Message id to reply to"},
-                "body": {"type": "string", "description": "Reply body (plain text)"},
+                "body": {"type": "string", "description": "Reply body (plain text, natural human content only)"},
             },
             "required": ["id", "body"],
         },
@@ -289,11 +457,4 @@ def _email_reply(inputs):
         reply["References"] = f"{existing_refs} {parsed['Message-ID']}".strip()
     reply.set_content(inputs["body"])
 
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], context=context, timeout=30) as smtp:
-            smtp.login(cfg["address"], cfg["password"])
-            smtp.send_message(reply)
-        return {"sent": True, "to": reply_to, "subject": subject}
-    except Exception as e:
-        return {"error": f"SMTP error: {e}"}
+    return _safe_send(cfg, reply, reply_to, subject, inputs["body"])
