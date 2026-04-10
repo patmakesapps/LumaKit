@@ -12,3 +12,4 @@ build/
 memory/*.db
 .claude/
 .lumakit/
+screenshots/

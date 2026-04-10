@@ -9,6 +9,15 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from core.paths import get_repo_root
+
+
+def _screenshots_dir() -> Path:
+    """Return the repo's screenshots/ folder, creating it if needed."""
+    path = get_repo_root() / "screenshots"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
 
 def get_browser_automation_tool():
     return {
@@ -200,7 +209,9 @@ def _browser_automation(inputs):
 
                     elif action_type == 'screenshot':
                         ss_name = action.get('value', f'screenshot_step_{i + 1}.png')
-                        ss_path = str(Path(ss_name).resolve())
+                        # Always anchor the filename inside screenshots/, even
+                        # if the model passes an absolute or nested path.
+                        ss_path = str(_screenshots_dir() / Path(ss_name).name)
                         page.screenshot(path=ss_path)
                         action_result['screenshot_path'] = ss_path
                         action_result['status'] = 'screenshot_taken'
@@ -241,7 +252,7 @@ def _browser_automation(inputs):
 
             # Take final screenshot if requested
             if take_screenshot:
-                final_screenshot = str(Path('browser_automation_result.png').resolve())
+                final_screenshot = str(_screenshots_dir() / 'browser_automation_result.png')
                 page.screenshot(path=final_screenshot, full_page=True)
                 results['screenshot_path'] = final_screenshot
 
