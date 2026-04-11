@@ -21,7 +21,9 @@ def load_user_configs():
         if not isinstance(config, dict):
             continue
         result[str(chat_id)] = {
-            "personality_prompt": str(config.get("personality_prompt", "") or "").strip()
+            "personality_prompt": str(config.get("personality_prompt", "") or "").strip(),
+            "voice_replies": bool(config.get("voice_replies", False)),
+            "voice_name": str(config.get("voice_name", "") or "").strip(),
         }
     return result
 
@@ -30,7 +32,9 @@ def save_user_configs(configs):
     payload = {}
     for chat_id, config in configs.items():
         payload[str(chat_id)] = {
-            "personality_prompt": str(config.get("personality_prompt", "") or "").strip()
+            "personality_prompt": str(config.get("personality_prompt", "") or "").strip(),
+            "voice_replies": bool(config.get("voice_replies", False)),
+            "voice_name": str(config.get("voice_name", "") or "").strip(),
         }
 
     CONFIG_PATH.parent.mkdir(exist_ok=True)

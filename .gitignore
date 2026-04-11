@@ -17,3 +17,5 @@ memory/*.db
 screenshots/
 lumi/
 .codex
+.venv-speech/
+.vendor/

@@ -1,5 +1,6 @@
 python-dotenv
 requests
+edge-tts
 pyperclip
 pyautogui
 Pillow
