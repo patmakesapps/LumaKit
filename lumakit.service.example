@@ -1,0 +1,18 @@
+[Unit]
+Description=LumaKit AI Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/LumaKit
+EnvironmentFile=/path/to/LumaKit/.env
+ExecStart=/usr/bin/python3 /path/to/LumaKit/telegram_bridge.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
