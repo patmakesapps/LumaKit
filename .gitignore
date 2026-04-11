@@ -12,5 +12,8 @@ build/
 memory/*.db
 .claude/
 .lumakit/
+.lumakit/telegram_owner_config.json
+.lumakit/telegram_user_config.json
 screenshots/
 lumi/
+.codex

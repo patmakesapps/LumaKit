@@ -44,6 +44,7 @@ Copy `.env.example` to `.env` and set the values you want to use.
 |---|---|
 | `OLLAMA_MODEL` | Primary model for chat requests |
 | `OLLAMA_FALLBACK_MODEL` | Fallback model if primary is unavailable |
+| `OLLAMA_LOCAL_MODEL` | Optional local model the Telegram owner can switch to with `/model local on` |
 | `SERPAPI_KEY` | Optional — enables premium web search |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather (for Telegram bridge) |
 | `TELEGRAM_ALLOWED_IDS` | Comma-separated Telegram chat IDs (first = owner/admin) |
@@ -92,6 +93,8 @@ Telegram commands:
 | `/new` | Start a fresh conversation |
 | `/status` | Show model, storage, and index info |
 | `/adduser` | (Owner only) Authorize a new user |
+| `/model` | (Owner only) Open a Telegram menu to change the owner's primary, fallback, or local-model mode |
+| `/personality` | View or change your own Telegram personality override |
 | `/users` | (Owner only) List authorized users |
 
 You can also send photos directly — LumaKit will analyze them if the model supports vision.
