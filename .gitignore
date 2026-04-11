@@ -19,3 +19,4 @@ lumi/
 .codex
 .venv-speech/
 .vendor/
+lumakit.service
