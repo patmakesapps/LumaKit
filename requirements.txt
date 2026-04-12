@@ -1,5 +1,8 @@
 python-dotenv
 requests
+httpx
+aiohttp
+beautifulsoup4
 edge-tts
 pyperclip
 pyautogui

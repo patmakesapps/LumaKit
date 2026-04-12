@@ -20,3 +20,4 @@ lumi/
 .venv-speech/
 .vendor/
 lumakit.service
+bug.txt

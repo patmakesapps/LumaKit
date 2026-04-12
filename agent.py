@@ -153,13 +153,20 @@ class Agent:
         # Lumi's own email account — surfaced so the LLM knows what to use
         # when a web task asks for "an email address" (signups, newsletters, etc.)
         lumi_email = os.getenv("LUMI_EMAIL_ADDRESS", "").strip()
+        identity_file = root / "lumi" / "identity.txt"
         identity_block = (
             f"Your own email address: {lumi_email}\n"
             "  When a web task (signup, newsletter, form) asks for an email, use YOUR address above — "
-            "do not ask the owner and do not use the owner's email. You own this inbox and can read replies via the email_* tools.\n\n"
+            "do not ask the owner and do not use the owner's email. You own this inbox and can read replies via the email_* tools.\n"
             if lumi_email
             else ""
         )
+        if identity_file.exists():
+            identity_block += (
+                f"Your identity file (accounts, credentials, site logins): {identity_file}\n"
+                "  Before signing up for a new service, read this file to check if you already have an account there.\n"
+                "  After creating a new account, append it to this file.\n\n"
+            )
 
         self._system_prompt_prefix = (
             "You are Lumi, a helpful coding agent with access to tools for working with files and code.\n\n"

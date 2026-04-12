@@ -14,6 +14,10 @@ def set_active_user(chat_id):
     _active_user["value"] = str(chat_id) if chat_id is not None else None
 
 
+def _get_active_user():
+    return _active_user["value"]
+
+
 def _parse_notify_at(value: str) -> str | None:
     """Use a focused LLM call to convert any time expression to ISO datetime.
     Returns a valid ISO string or None if parsing failed."""

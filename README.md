@@ -2,19 +2,21 @@
 
 ![LumaKit Logo](photos/lumakit_cat_logo.png)
 
-LumaKit is a local CLI agent that talks to an Ollama model and gives it access to repo, runtime, web, and communication tools. It also supports Telegram as a chat interface with multi-user sessions.
+LumaKit is a local AI agent that talks to an Ollama model and gives it access to repo, runtime, web, and communication tools. It runs as a background service and can be controlled from Telegram, the CLI, or autonomously via the task runner.
 
 ## Features
 
 - **Tool-calling agent** — loads tools automatically from `tools/` and lets the model call them in multi-round loops
+- **Autonomous task runner** — give Lumi a goal and a deadline; it plans, executes steps, self-evaluates, and reports back. Survives restarts — all state is persisted in SQLite
 - **CLI interface** — interactive chat with slash commands, clipboard image pasting, chat persistence, and storage management
-- **Telegram bridge** — chat with LumaKit from your phone; supports multiple authorized users, photo/vision analysis, optional local voice-note transcription (whisper.cpp), optional `edge-tts` voice replies (sent as voice memos, not music tracks), and admin controls
-- **Autonomous email** — give the agent its own Gmail account; it polls every 60s, drafts replies for the owner, and requires one-tap approval before sending (owner-only, with codebase-leak filter, rate limiting, and URL stripping). See [docs/gmail_setup.md](docs/gmail_setup.md).
-- **Family & personal reminders** — per-user reminders plus household-wide broadcasts. See [docs/family_alerts.md](docs/family_alerts.md).
+- **Telegram bridge** — chat with LumaKit from your phone; supports multiple authorized users, photo/vision analysis, optional local voice-note transcription (whisper.cpp), optional `edge-tts` voice replies (sent as voice memos), and admin controls
+- **Autonomous email** — give the agent its own Gmail account; it polls every 60s, drafts replies for the owner, and requires one-tap approval before sending (owner-only, with codebase-leak filter, rate limiting, and URL stripping). See [docs/gmail_setup.md](docs/gmail_setup.md)
+- **Identity file** — `lumi/identity.txt` stores Lumi's own accounts and credentials; surfaced in the system prompt so Lumi checks it before signing up for new services and appends new accounts after creating them
+- **Family & personal reminders** — per-user reminders plus household-wide broadcasts. See [docs/family_alerts.md](docs/family_alerts.md)
 - **Screenshot tool** — the agent can grab the current screen and push it to the owner on Telegram
 - **Heartbeat** — background check-ins from Lumi when the owner has been quiet
 - **Code intelligence** — built-in code index using tree-sitter for symbol lookup, definition finding, usage search, and call graphs
-- **Memory & reminders** — persistent memory store and a background reminder system
+- **Memory & reminders** — persistent SQLite memory store and a background reminder system
 - **Context management** — automatic conversation summarization to keep context lean
 - **Storage budgeting** — tracks local data usage with configurable budgets and cleanup prompts
 - **Fallback model support** — automatically falls back to a secondary Ollama model if the primary is unavailable
@@ -36,6 +38,7 @@ Install dependencies:
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium
 ```
 
 For Telegram speech, also build `whisper.cpp` locally and make sure its `base.en` model is downloaded.
@@ -61,8 +64,6 @@ Copy `.env.example` to `.env` and set the values you want to use.
 | `LUMI_EMAIL_PASSWORD` | Gmail app password (see [docs/gmail_setup.md](docs/gmail_setup.md)) |
 | `LUMI_EMAIL_SIGNATURE` | Signature appended to every outbound email |
 | `LUMI_EMAIL_MAX_PER_HOUR` | Rate limit on outbound email sends (default 10) |
-
-Recommended model: `glm-5:cloud`
 
 ## Usage
 
@@ -93,6 +94,8 @@ CLI commands:
 python telegram_bridge.py
 ```
 
+Or run as a systemd service (see [docs/autostart.md](docs/autostart.md)).
+
 Telegram commands:
 
 | Command | Action |
@@ -101,14 +104,34 @@ Telegram commands:
 | `/chats` | List and resume saved conversations |
 | `/new` | Start a fresh conversation |
 | `/status` | Show model, storage, and index info |
+| `/tasks` | List autonomous background tasks |
+| `/task <id>` | Show details and history for a specific task |
 | `/voice ...` | Enable audio replies, list voices, or set your preferred Edge voice |
 | `/adduser` | (Owner only) Authorize a new user |
+| `/removeuser` | (Owner only) Remove an authorized user |
 | `/model` | (Owner only) Open a Telegram menu to change the owner's primary, fallback, or local-model mode |
 | `/personality` | View or change your own Telegram personality override |
 | `/users` | (Owner only) List authorized users |
 
 You can also send photos directly — LumaKit will analyze them if the model supports vision.
 If local speech is configured, you can send Telegram voice notes or audio files and LumaKit will transcribe them before replying.
+
+### Autonomous Tasks
+
+Tell Lumi a goal with a deadline and it will handle the rest:
+
+> *"Research the best dividend ETFs available right now — compare yield, expense ratio, and 1-year return. Report back by tonight."*
+
+> *"Monitor the Bitcoin price every 15 minutes for the next hour and send me updates."*
+
+Lumi will:
+1. Generate a step-by-step plan and confirm it with you
+2. Execute each step using its full tool suite (web search, browser, code execution, etc.)
+3. Self-evaluate after each step and retry or escalate if stuck
+4. Ping you on Telegram when blocked and wait for your input
+5. Send a final report when done or when the deadline arrives
+
+Use `/tasks` to check status or `/task <id>` for full history. Tasks survive service restarts.
 
 ## Project Structure
 
@@ -119,7 +142,7 @@ ollama_client.py        Ollama HTTP client with fallback and timeout support
 telegram_bridge.py      Telegram bridge entry point — poll loop and background services
 tool_registry.py        Auto-discovers and registers tools from tools/
 
-core/                   Internal modules
+core/
   auth.py               Owner gating (used by email tools)
   chat_store.py         SQLite-backed conversation persistence
   cli.py                Terminal UI helpers (spinner, colors, diffs)
@@ -134,6 +157,8 @@ core/                   Internal modules
   reminder_checker.py   Background reminder polling thread
   storage.py            Storage budget tracking
   summarizer.py         Conversation summarization logic
+  task_runner.py        Autonomous task execution engine — plan, execute, evaluate, report
+  task_store.py         SQLite-backed task persistence (memory/tasks.db)
   telegram_api.py       Raw Telegram Bot API helpers (send, download, poll)
   telegram_commands.py  Telegram slash-command handlers and session/runtime management
   telegram_io.py        Telegram I/O primitives — send_message, TTS dispatch, polling, confirm
@@ -145,9 +170,14 @@ tools/
   comms/                Communication tools (telegram, email, screenshot, reactions)
   memory/               Memory and reminder tools (save, recall, remind)
   repo/                 File and git operations (read, write, edit, delete, search, diff, git)
-  runtime/              Shell, Python, clipboard, system info, storage tools
+  runtime/              Shell, Python, system tools (restart_service, storage, clipboard*)
   web/                  HTTP fetch and web search
+
+lumi/                   Lumi's private data — gitignored
+  identity.txt          Lumi's accounts, credentials, and site logins
 ```
+
+*Clipboard tools require a display and are not available in headless/server mode.*
 
 ## Adding Tools
 

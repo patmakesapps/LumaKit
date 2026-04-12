@@ -88,3 +88,43 @@ def _reboot_system(inputs):
         "success": True,
         "message": f"Restarting in 2 seconds. Reason: {reason}"
     }
+
+
+def get_restart_service_tool():
+    return {
+        "name": "restart_service",
+        "description": (
+            "Restart the LumaKit systemd service via 'sudo systemctl restart lumakit'. "
+            "Use this after code changes, config updates, or when a clean restart is needed. "
+            "Lumi will go offline briefly — send a heads-up message before calling this."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Why the service is being restarted"
+                }
+            },
+            "required": ["reason"]
+        },
+        "execute": _restart_service
+    }
+
+
+def _restart_service(inputs):
+    import threading
+
+    reason = inputs.get("reason", "no reason given")
+
+    def _do_restart():
+        subprocess.run(["sudo", "systemctl", "restart", "lumakit"], check=False)
+
+    t = threading.Timer(2.0, _do_restart)
+    t.daemon = True
+    t.start()
+
+    return {
+        "success": True,
+        "message": f"Restarting lumakit service in 2 seconds. Reason: {reason}"
+    }
