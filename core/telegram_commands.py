@@ -227,6 +227,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         ]
         if str(chat_id) == str(OWNER_ID):
             lines.append("/adduser - authorize a new user")
+            lines.append("/removeuser - remove an authorized user")
             lines.append("/model - choose the owner's Telegram model settings")
             lines.append("/users - list authorized users")
         lines.append("/personality - view or change your Telegram personality override")
@@ -307,7 +308,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         )
         return True
 
-    if cmd in {"/adduser", "/users", "/model"} and str(chat_id) != str(OWNER_ID):
+    if cmd in {"/adduser", "/removeuser", "/users", "/model"} and str(chat_id) != str(OWNER_ID):
         send_message("This command is owner-only.")
         return True
 
@@ -505,6 +506,36 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
             tag = " (owner)" if uid == str(OWNER_ID) else ""
             lines.append(f"- {name}{tag} (id: {uid})")
         send_message("\n".join(lines))
+        return True
+
+    if cmd == "/removeuser" and str(chat_id) == str(OWNER_ID):
+        removable = [uid for uid in ALLOWED_IDS if uid != str(OWNER_ID)]
+        if not removable:
+            send_message("No users to remove (can't remove the owner).")
+            return True
+        lines = ["Which user do you want to remove?\n"]
+        for i, uid in enumerate(removable, 1):
+            name = _get_user_label(uid)
+            lines.append(f"{i}. {name} (id: {uid})")
+        lines.append("\nReply with a number, or 'cancel'.")
+        send_message("\n".join(lines))
+
+        reply, _ = poll_for_reply(chat_id)
+        if reply.lower() in ("cancel", "c", "n", "no"):
+            send_message("Cancelled.")
+            return True
+        try:
+            pick = int(reply) - 1
+            if 0 <= pick < len(removable):
+                removed_id = removable[pick]
+                removed_name = _get_user_label(removed_id)
+                ALLOWED_IDS.discard(removed_id)
+                _save_allowed_ids()
+                send_message(f"Removed {removed_name}.")
+            else:
+                send_message("Invalid number.")
+        except ValueError:
+            send_message("Invalid input.")
         return True
 
     if cmd == "/start":

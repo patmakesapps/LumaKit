@@ -1,5 +1,6 @@
 from datetime import datetime
 import platform
+import subprocess
 
 def get_current_datetime_tool():
     return {
@@ -48,3 +49,42 @@ def _get_timezone():
     else:
         # Unix/Linux/Mac
         return time.strftime("%Z")
+
+
+def get_reboot_system_tool():
+    return {
+        "name": "reboot_system",
+        "description": "Restarts the Lumi process. Use when something is broken and a fresh start would help (e.g. after config changes, memory issues, or unrecoverable errors). Lumi will restart immediately — send a farewell message before calling this.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Why a restart is needed"
+                }
+            },
+            "required": ["reason"]
+        },
+        "execute": _reboot_system
+    }
+
+
+def _reboot_system(inputs):
+    import os
+    import sys
+    import threading
+
+    reason = inputs["reason"]
+
+    def _restart():
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    # Short delay so the tool result can be returned before the process is replaced
+    t = threading.Timer(2.0, _restart)
+    t.daemon = True
+    t.start()
+
+    return {
+        "success": True,
+        "message": f"Restarting in 2 seconds. Reason: {reason}"
+    }
