@@ -54,7 +54,7 @@ def get_browser_automation_tool():
                                     'fill sets a field value directly (fast, but may not trigger React state updates). '
                                     'type simulates keystrokes character-by-character (slower, but works reliably with React/SPA controlled components). '
                                     'Use type instead of fill when a form submission seems to ignore filled values. '
-                                    'click/select/wait/screenshot/scroll interact with the page. '
+                                    'click/select/wait/screenshot/scroll interact with the page. screenshot can take an optional selector to capture just that element instead of the full viewport. '
                                     'wait_for_selector pauses until an element appears (essential for React/SPA pages after clicks). '
                                     'get_text returns visible text (whole page, or scoped to selector). '
                                     'get_links returns all <a> tags with their text + href (including mailto:). '
@@ -361,7 +361,7 @@ def _browser_automation(inputs):
             # Take final screenshot if requested
             if take_screenshot:
                 final_screenshot = str(_screenshots_dir() / 'browser_automation_result.png')
-                page.screenshot(path=final_screenshot, full_page=True)
+                page.screenshot(path=final_screenshot, full_page=False)
                 results['screenshot_path'] = final_screenshot
 
             # Capture final page state

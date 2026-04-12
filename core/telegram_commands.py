@@ -221,6 +221,8 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
             "/stop - interrupt Lumi mid-task",
             "/tools - toggle tool call visibility",
             "/status - show model, storage, index info",
+            "/tasks - list autonomous background tasks",
+            "/task <id> - show details for a specific task",
             "/help - this message",
             "/voice - toggle replies and switch Edge voices",
             "\nYou can also send a photo directly — Lumi will analyze it if the model supports vision.",
@@ -536,6 +538,64 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
                 send_message("Invalid number.")
         except ValueError:
             send_message("Invalid input.")
+        return True
+
+    if cmd == "/tasks":
+        from core import task_store as _ts
+        tasks = _ts.get_tasks_by_owner(str(chat_id), limit=20)
+        if not tasks:
+            send_message("No tasks found. Tell Lumi to work on something and it'll show up here.")
+            return True
+        status_emoji = {
+            "planning": "🗂", "active": "⚙️", "blocked": "🔴",
+            "done": "✅", "failed": "❌", "cancelled": "🚫",
+        }
+        lines = ["Your tasks:\n"]
+        for t in tasks:
+            em = status_emoji.get(t["status"], "❓")
+            due = f"  due {t['due_at'][:10]}" if t.get("due_at") else ""
+            plan = t.get("plan") or []
+            step_str = f"  step {t['current_step']+1}/{len(plan)}" if plan and t["status"] == "active" else ""
+            lines.append(f"{em} [{t['id']}] {t['title']}{due}{step_str}")
+        lines.append("\nUse /task <id> for details.")
+        send_message("\n".join(lines))
+        return True
+
+    if cmd == "/task":
+        from core import task_store as _ts
+        if not args:
+            send_message("Usage: /task <id>")
+            return True
+        try:
+            task_id = int(args.strip())
+        except ValueError:
+            send_message("Usage: /task <id>  (id must be a number)")
+            return True
+        task = _ts.get_task(task_id)
+        if not task:
+            send_message(f"Task {task_id} not found.")
+            return True
+        plan = task.get("plan") or []
+        history = task.get("history") or []
+        step_idx = task["current_step"]
+        current = plan[step_idx]["description"] if plan and step_idx < len(plan) else "N/A"
+        history_lines = []
+        for h in history:
+            if h.get("type") == "step_result":
+                history_lines.append(
+                    f"  Step {h.get('step_index',0)+1} [{h.get('verdict')}]: {h.get('summary','')[:80]}"
+                )
+        result_block = f"\n\nResult:\n{task['result']}" if task.get("result") else ""
+        send_message(
+            f"Task [{task_id}]: {task['title']}\n"
+            f"Status: {task['status']}\n"
+            f"Goal: {task['goal'][:200]}\n"
+            f"Due: {task.get('due_at','none')}\n"
+            f"Steps: {step_idx+1}/{len(plan) or '?'}\n"
+            f"Current step: {current[:100]}\n"
+            + ("\nHistory:\n" + "\n".join(history_lines) if history_lines else "")
+            + result_block
+        )
         return True
 
     if cmd == "/start":

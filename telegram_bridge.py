@@ -24,6 +24,7 @@ from core.cli import Spinner
 from core.email_checker import EmailChecker
 from core.heartbeat import Heartbeat
 from core.reminder_checker import ReminderChecker
+from core.task_runner import TaskRunner
 from core.telegram_api import (
     download_telegram_file,
     download_telegram_photo,
@@ -160,6 +161,16 @@ def main():
 
     reminders = ReminderChecker(interval=30, notify=notify_telegram)
     reminders.start()
+
+    # --- Task runner ---
+    def task_notify(msg: str, chat_id: str | None = None):
+        target = chat_id or OWNER_ID or (list(ALLOWED_IDS)[0] if ALLOWED_IDS else None)
+        if target:
+            send_message(msg, chat_id=target)
+            print(f"[task -> {target}] {msg[:120]}")
+
+    task_runner = TaskRunner(interval=60, notify=task_notify)
+    task_runner.start()
 
     # --- Heartbeat ---
     def heartbeat_send(msg):
@@ -428,6 +439,7 @@ def main():
             reminders.stop()
             heartbeat.stop()
             email_checker.stop()
+            task_runner.stop()
             print("\nBridge stopped.")
             break
         except (socket.timeout, urllib.error.URLError):
