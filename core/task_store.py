@@ -140,17 +140,13 @@ def fail_task(task_id: int, reason: str) -> None:
     conn.close()
 
 
-def cancel_task(task_id: int) -> bool:
-    """Cancel a task. Returns False if it wasn't found or already finished."""
+def delete_task(task_id: int) -> bool:
+    """Permanently delete a task. Returns False if it wasn't found."""
     conn = _connect()
-    row = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
-    if not row or row["status"] in ("done", "failed", "cancelled"):
-        conn.close()
-        return False
-    conn.execute("UPDATE tasks SET status='cancelled' WHERE id=?", (task_id,))
+    cursor = conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
     conn.commit()
     conn.close()
-    return True
+    return cursor.rowcount > 0
 
 
 # ---------------------------------------------------------------------------

@@ -196,27 +196,31 @@ def _get_task_status(inputs: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# cancel_task
+# delete_task
 # ---------------------------------------------------------------------------
 
-def get_cancel_task_tool():
+def get_delete_task_tool():
     return {
-        "name": "cancel_task",
-        "description": "Cancel an autonomous background task by id.",
+        "name": "delete_task",
+        "description": (
+            "Permanently delete an autonomous background task by id. "
+            "Use when the user wants to cancel or remove a task. "
+            "Run list_tasks first if you need to find the id."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "integer", "description": "Task id to cancel"},
+                "task_id": {"type": "integer", "description": "Task id to delete"},
             },
             "required": ["task_id"],
         },
-        "execute": _cancel_task,
+        "execute": _delete_task,
     }
 
 
-def _cancel_task(inputs: dict) -> dict:
+def _delete_task(inputs: dict) -> dict:
     task_id = int(inputs["task_id"])
-    ok = task_store.cancel_task(task_id)
+    ok = task_store.delete_task(task_id)
     if ok:
-        return {"cancelled": True, "message": f"Task {task_id} cancelled."}
-    return {"cancelled": False, "message": f"Task {task_id} not found or already finished."}
+        return {"deleted": True, "message": f"Task {task_id} deleted."}
+    return {"deleted": False, "message": f"Task {task_id} not found."}
