@@ -195,11 +195,13 @@ def main():
             session["first_message_sent"] = True
         save_chat(session["chat_id"], session["title"], session["messages"])
 
+    heartbeat_owner = OWNER_ID or (list(ALLOWED_IDS)[0] if ALLOWED_IDS else None)
     heartbeat = Heartbeat(
         send=heartbeat_send,
         interval=900,
         cooldown=3600,
         inject_session=heartbeat_inject_session,
+        owner_chat_id=heartbeat_owner,
     )
     heartbeat.start()
 

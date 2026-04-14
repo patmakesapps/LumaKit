@@ -10,18 +10,22 @@ from ollama_client import OllamaClient
 
 
 class Heartbeat:
-    def __init__(self, send, interval=900, cooldown=3600, inject_session=None):
+    def __init__(self, send, interval=900, cooldown=3600, inject_session=None, owner_chat_id=None):
         """
         send           — callable(text) to message the user
         interval       — seconds between checks (default 15 min)
         cooldown       — minimum seconds between outbound messages (default 1 hr)
         inject_session — optional callable(text) that appends an assistant message
                          to the owner's agent session so follow-up replies have context
+        owner_chat_id  — the chat_id the heartbeat targets. Used to scope memory
+                         lookups so other users' memories don't bleed in. None means
+                         "no scope filter" (legacy/CLI behavior).
         """
         self._send = send
         self._interval = interval
         self._cooldown = cooldown
         self._inject = inject_session
+        self._owner_chat_id = str(owner_chat_id) if owner_chat_id is not None else None
         self._stop = threading.Event()
         self._thread = None
         self._last_sent = 0
@@ -33,8 +37,8 @@ class Heartbeat:
         now = datetime.now()
         time_str = now.strftime("%A %I:%M %p")
 
-        # Recent memories (last 10)
-        recent = memory_store.get_recent(10)
+        # Recent memories (last 10), scoped to the owner so other users' memories don't bleed in.
+        recent = memory_store.get_recent(10, active_user=self._owner_chat_id)
         memory_lines = []
         for m in recent:
             line = f"- [{m['type']}] {m['content']}"
