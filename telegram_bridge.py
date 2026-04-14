@@ -278,6 +278,11 @@ def main():
 
     print(f"Telegram bridge running. {len(ALLOWED_IDS)} authorized user(s).")
 
+    try:
+        send_message("LumaKit is running.", chat_id=OWNER_ID)
+    except Exception:
+        pass
+
     while True:
         try:
             if _pending_updates:

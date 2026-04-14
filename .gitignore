@@ -21,3 +21,4 @@ lumi/
 .vendor/
 lumakit.service
 bug.txt
+docs/

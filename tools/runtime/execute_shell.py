@@ -25,7 +25,7 @@ def _execute_shell(inputs):
     timeout = inputs.get('timeout', 600)
 
     try:
-        shell = platform.system() == 'Windows'
+        shell = True
 
         # Run commands from the project directory, not system root
         cwd = os.getcwd()
