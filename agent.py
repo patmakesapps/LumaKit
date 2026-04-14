@@ -23,6 +23,247 @@ CONFIRM_TOOLS = {"execute_shell", "execute_python", "git_commit", "git_push"}
 # Tools that have a built-in preview/confirm flow — always preview first
 PREVIEW_TOOLS = {"move_path"}
 
+# Keep tool outputs useful, but prevent a single tool call from bloating the
+# active chat history enough to stall later model requests.
+TOOL_HISTORY_MAX_CHARS = 24000
+TOOL_HISTORY_STRING_LIMIT = 4000
+TOOL_HISTORY_READ_LIMIT = 12000
+TOOL_HISTORY_STDIO_LIMIT = 8000
+TOOL_HISTORY_LIST_LIMIT = 40
+TOOL_HISTORY_DICT_LIMIT = 60
+TOOL_HISTORY_BROWSER_LIST_LIMIT = 25
+TOOL_HISTORY_BROWSER_ACTION_LIMIT = 12
+TOOL_HISTORY_BROWSER_TEXT_LIMIT = 2000
+
+
+def _truncate_text(value, limit):
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    omitted = len(value) - limit
+    return value[:limit] + f"... [truncated {omitted} chars]"
+
+
+def _compact_browser_history(data):
+    if not isinstance(data, dict):
+        return data
+
+    compact = dict(data)
+    actions = compact.get("actions_performed")
+    if isinstance(actions, list):
+        limited_actions = []
+        for action in actions[:TOOL_HISTORY_BROWSER_ACTION_LIMIT]:
+            if not isinstance(action, dict):
+                limited_actions.append(action)
+                continue
+
+            entry = dict(action)
+            if isinstance(entry.get("text"), str):
+                entry["text"] = _truncate_text(
+                    entry["text"], TOOL_HISTORY_BROWSER_TEXT_LIMIT
+                )
+
+            links = entry.get("links")
+            if isinstance(links, list):
+                limited_links = []
+                for link in links[:TOOL_HISTORY_BROWSER_LIST_LIMIT]:
+                    if isinstance(link, dict):
+                        limited_links.append(
+                            {
+                                "text": _truncate_text(str(link.get("text", "")), 200),
+                                "href": _truncate_text(str(link.get("href", "")), 300),
+                            }
+                        )
+                    else:
+                        limited_links.append(_truncate_text(str(link), 300))
+                entry["links"] = limited_links
+                if len(links) > len(limited_links):
+                    entry["links_truncated"] = len(links) - len(limited_links)
+
+            elements = entry.get("elements")
+            if isinstance(elements, list):
+                limited_elements = []
+                for element in elements[:TOOL_HISTORY_BROWSER_LIST_LIMIT]:
+                    if isinstance(element, dict):
+                        trimmed = {}
+                        for key in (
+                            "tag",
+                            "type",
+                            "id",
+                            "name",
+                            "placeholder",
+                            "aria_label",
+                            "data_testid",
+                            "text",
+                            "required",
+                            "suggested_selector",
+                            "error",
+                        ):
+                            if key not in element:
+                                continue
+                            value = element[key]
+                            if isinstance(value, str):
+                                value = _truncate_text(value, 200)
+                            trimmed[key] = value
+                        limited_elements.append(trimmed)
+                    else:
+                        limited_elements.append(_truncate_text(str(element), 300))
+                entry["elements"] = limited_elements
+                if len(elements) > len(limited_elements):
+                    entry["elements_truncated"] = len(elements) - len(limited_elements)
+
+            limited_actions.append(entry)
+
+        compact["actions_performed"] = limited_actions
+        if len(actions) > len(limited_actions):
+            compact["actions_truncated"] = len(actions) - len(limited_actions)
+
+    for key in ("page_text_snippet", "error"):
+        if isinstance(compact.get(key), str):
+            compact[key] = _truncate_text(
+                compact[key], TOOL_HISTORY_BROWSER_TEXT_LIMIT
+            )
+    for key in ("url", "final_url", "page_title", "final_title", "screenshot_path"):
+        if isinstance(compact.get(key), str):
+            compact[key] = _truncate_text(compact[key], 300)
+
+    return compact
+
+
+def _compact_value_for_history(value, path=()):
+    key = path[-1] if path else ""
+
+    if isinstance(value, str):
+        limit = TOOL_HISTORY_STRING_LIMIT
+        if key == "content":
+            limit = TOOL_HISTORY_READ_LIMIT
+        elif key in {"stdout", "stderr"}:
+            limit = TOOL_HISTORY_STDIO_LIMIT
+        elif key in {"text", "page_text_snippet", "error"}:
+            limit = TOOL_HISTORY_BROWSER_TEXT_LIMIT
+        elif key in {"href", "url", "final_url", "selector", "suggested_selector"}:
+            limit = 300
+        return _truncate_text(value, limit)
+
+    if isinstance(value, list):
+        limit = TOOL_HISTORY_LIST_LIMIT
+        if key in {"links", "elements"}:
+            limit = TOOL_HISTORY_BROWSER_LIST_LIMIT
+        elif key == "actions_performed":
+            limit = TOOL_HISTORY_BROWSER_ACTION_LIMIT
+        items = [
+            _compact_value_for_history(item, path + (str(i),))
+            for i, item in enumerate(value[:limit])
+        ]
+        if len(value) > limit:
+            items.append({"_truncated_items": len(value) - limit})
+        return items
+
+    if isinstance(value, dict):
+        items = list(value.items())
+        compact = {}
+        for key_name, item in items[:TOOL_HISTORY_DICT_LIMIT]:
+            compact[str(key_name)] = _compact_value_for_history(
+                item, path + (str(key_name),)
+            )
+        if len(items) > TOOL_HISTORY_DICT_LIMIT:
+            compact["_truncated_keys"] = len(items) - TOOL_HISTORY_DICT_LIMIT
+        return compact
+
+    return value
+
+
+def _summarize_large_tool_data(data):
+    if not isinstance(data, dict):
+        return _compact_value_for_history(data, ("data",))
+
+    summary = {}
+    for key in (
+        "path",
+        "count",
+        "status",
+        "created",
+        "deleted",
+        "bytes_written",
+        "replacements",
+        "page_title",
+        "final_title",
+        "url",
+        "final_url",
+        "screenshot_path",
+        "error",
+    ):
+        if key in data:
+            summary[key] = _compact_value_for_history(data[key], ("data", key))
+
+    if isinstance(data.get("content"), str):
+        summary["content_preview"] = _truncate_text(data["content"], 4000)
+    if isinstance(data.get("stdout"), str):
+        summary["stdout_preview"] = _truncate_text(data["stdout"], 4000)
+    if isinstance(data.get("stderr"), str):
+        summary["stderr_preview"] = _truncate_text(data["stderr"], 4000)
+    if isinstance(data.get("page_text_snippet"), str):
+        summary["page_text_snippet"] = _truncate_text(
+            data["page_text_snippet"], TOOL_HISTORY_BROWSER_TEXT_LIMIT
+        )
+
+    actions = data.get("actions_performed")
+    if isinstance(actions, list):
+        summary["actions_performed"] = _compact_browser_history(
+            {"actions_performed": actions}
+        )["actions_performed"]
+
+    if not summary:
+        summary["available_keys"] = list(data.keys())[:20]
+
+    return summary
+
+
+def compact_tool_result_for_history(tool_name, tool_result):
+    """Serialize a tool result with size guards so chats stay responsive."""
+    payload = tool_result
+    if isinstance(payload, dict):
+        payload = json.loads(json.dumps(payload, default=str))
+        if tool_name == "browser_automation" and isinstance(payload.get("data"), dict):
+            payload["data"] = _compact_browser_history(payload["data"])
+        payload = _compact_value_for_history(payload)
+
+    serialized = json.dumps(payload, ensure_ascii=False)
+    if len(serialized) <= TOOL_HISTORY_MAX_CHARS:
+        return serialized
+
+    fallback = {
+        "success": bool(tool_result.get("success")) if isinstance(tool_result, dict) else True,
+        "tool": tool_name,
+        "truncated": True,
+        "note": (
+            "Tool output was trimmed before being stored in chat history to keep "
+            "later model calls responsive."
+        ),
+    }
+    if isinstance(tool_result, dict):
+        if "error" in tool_result:
+            fallback["error"] = _truncate_text(str(tool_result["error"]), 1000)
+        if "data" in tool_result:
+            fallback["data"] = _summarize_large_tool_data(tool_result["data"])
+    else:
+        fallback["data"] = _truncate_text(str(tool_result), 4000)
+
+    serialized = json.dumps(fallback, ensure_ascii=False)
+    if len(serialized) > TOOL_HISTORY_MAX_CHARS:
+        serialized = _truncate_text(serialized, TOOL_HISTORY_MAX_CHARS)
+    return serialized
+
+
+def compact_tool_message_content(tool_name, content):
+    """Re-compact an existing tool-history message, including old saved chats."""
+    if not isinstance(content, str):
+        return content
+    try:
+        parsed = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return _truncate_text(content, TOOL_HISTORY_MAX_CHARS)
+    return compact_tool_result_for_history(tool_name, parsed)
+
 
 def _build_project_tree(root: Path, max_depth: int = 3) -> str:
     lines = []
@@ -365,6 +606,16 @@ class Agent:
                 pass
         return self.interrupt_requested
 
+    def _compact_tool_history(self):
+        """Shrink saved tool payloads so old chats don't keep poisoning context."""
+        for message in self.messages:
+            if message.get("role") != "tool":
+                continue
+            content = message.get("content")
+            compacted = compact_tool_message_content(message.get("name"), content)
+            if compacted != content:
+                message["content"] = compacted
+
     def _interrupt_response(self):
         """Produce the stop response and reset the flag."""
         self.interrupt_requested = False
@@ -374,6 +625,7 @@ class Agent:
 
     def ask_llm(self, prompt):
         self.messages.append({"role": "user", "content": prompt})
+        self._compact_tool_history()
         self._trim_history()
 
         # Clear any stale interrupt from a previous run
@@ -507,7 +759,7 @@ class Agent:
                     {
                         "role": "tool",
                         "name": tool_name,
-                        "content": json.dumps(tool_result),
+                        "content": compact_tool_result_for_history(tool_name, tool_result),
                     }
                 )
 
@@ -547,6 +799,7 @@ class Agent:
             "content": prompt,
             "images": [b64],
         })
+        self._compact_tool_history()
         self._trim_history()
 
         spinner = Spinner("Lumi is looking at the image").start()

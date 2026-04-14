@@ -12,11 +12,31 @@ from playwright.sync_api import sync_playwright
 from core.paths import get_repo_root
 
 
+# Don't launch Chromium if the machine is already under obvious memory pressure.
+_MIN_AVAILABLE_RAM = 1_000_000_000  # ~1 GiB
+
+
 def _screenshots_dir() -> Path:
     """Return the repo's screenshots/ folder, creating it if needed."""
     path = get_repo_root() / "screenshots"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _available_ram() -> int | None:
+    """Return MemAvailable in bytes on Linux, or None if it can't be read."""
+    meminfo = "/proc/meminfo"
+    if not os.path.exists(meminfo):
+        return None
+    try:
+        with open(meminfo, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    parts = line.split()
+                    return int(parts[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
 
 
 def get_browser_automation_tool():
@@ -235,10 +255,30 @@ def _browser_automation(inputs):
         'actions_performed': [],
         'success': False
     }
+    browser = None
+    context = None
+    available = _available_ram()
+
+    if available is not None and available < _MIN_AVAILABLE_RAM:
+        available_gb = round(available / (1024 ** 3), 2)
+        required_gb = round(_MIN_AVAILABLE_RAM / (1024 ** 3), 2)
+        results['error'] = (
+            f'Not enough free RAM to safely launch Chromium '
+            f'({available_gb} GiB available, need at least {required_gb} GiB).'
+        )
+        return results
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--disable-dev-shm-usage',
+                    '--disable-extensions',
+                    '--disable-background-networking',
+                    '--disable-background-timer-throttling',
+                ],
+            )
             context = browser.new_context(
                 viewport={'width': 1280, 'height': 720},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -369,9 +409,18 @@ def _browser_automation(inputs):
             results['final_title'] = page.title()
             results['success'] = True
 
-            browser.close()
-
     except Exception as e:
         results['error'] = str(e)
+    finally:
+        if context is not None:
+            try:
+                context.close()
+            except Exception:
+                pass
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
 
     return results
