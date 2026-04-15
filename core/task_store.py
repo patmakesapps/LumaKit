@@ -49,8 +49,14 @@ def create_task(
     constraints: dict | None = None,
     owner_chat_id: str | None = None,
     due_at: str | None = None,
+    start_at: str | None = None,
 ) -> int:
-    """Insert a new task and return its id."""
+    """Insert a new task and return its id.
+
+    start_at is when planning should kick off (defaults to now). Use this for
+    tasks the user wants to begin at a specific future time — it's stored in
+    next_run_at so the runner will skip the task until that moment.
+    """
     conn = _connect()
     conn.execute(
         """INSERT INTO tasks
@@ -64,7 +70,7 @@ def create_task(
             owner_chat_id,
             datetime.now().isoformat(),
             due_at,
-            datetime.now().isoformat(),   # run planning pass immediately
+            start_at or datetime.now().isoformat(),
         ),
     )
     conn.commit()

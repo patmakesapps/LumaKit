@@ -36,21 +36,21 @@ class Heartbeat:
     def _build_context(self):
         now = datetime.now()
         time_str = now.strftime("%A %I:%M %p")
+        now_iso = now.isoformat()
 
         # Recent memories (last 10), scoped to the owner so other users' memories don't bleed in.
+        # Skip reminders that haven't fired yet — ReminderChecker will deliver them automatically
+        # at notify_at, so surfacing them here just tempts the LLM to pre-nag the user.
         recent = memory_store.get_recent(10, active_user=self._owner_chat_id)
         memory_lines = []
         for m in recent:
+            if m["type"] == "reminder" and m.get("notify_at") and m["notify_at"] > now_iso:
+                continue
             line = f"- [{m['type']}] {m['content']}"
             if m.get("notify_at"):
                 line += f" (notify: {m['notify_at']})"
             memory_lines.append(line)
         memories = "\n".join(memory_lines) if memory_lines else "None"
-
-        # Upcoming reminders
-        upcoming = [m for m in recent if m["type"] == "reminder" and m.get("notify_at")]
-        reminder_lines = [f"- {m['content']} at {m['notify_at']}" for m in upcoming]
-        reminders = "\n".join(reminder_lines) if reminder_lines else "None"
 
         # Time since last conversation
         minutes_quiet = int((time.time() - self._last_sent) / 60) if self._last_sent else None
@@ -59,7 +59,6 @@ class Heartbeat:
         context = (
             f"Time: {time_str}\n"
             f"Last message to user: {quiet_str}\n"
-            f"Upcoming reminders:\n{reminders}\n"
             f"Recent memories:\n{memories}"
         )
         return context

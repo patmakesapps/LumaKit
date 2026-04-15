@@ -34,7 +34,11 @@ def get_create_task_tool():
         "description": (
             "Create a new autonomous background task for Lumi to work on independently. "
             "Lumi will plan, execute, and report back at the due date. "
-            "Use this when the user gives a goal that takes hours or days to complete."
+            "Use this when the user gives a goal that takes hours or days to complete. "
+            "IMPORTANT — start_at vs due_at: if the user says 'start at 5pm' / 'begin tomorrow morning' / "
+            "'kick off at X', that's start_at (when planning begins). If they say 'by 5pm' / 'deadline is X' / "
+            "'have it done by X', that's due_at (the deadline). They are different — don't put a start time "
+            "into due_at or the task will be treated as already overdue."
         ),
         "inputSchema": {
             "type": "object",
@@ -47,9 +51,20 @@ def get_create_task_tool():
                     "type": "string",
                     "description": "Full description of what to accomplish",
                 },
+                "start_at": {
+                    "type": "string",
+                    "description": (
+                        "ISO 8601 time when Lumi should begin working on this task "
+                        "(e.g. '2026-04-15T17:00:00'). Omit to start immediately. "
+                        "Use this when the user specifies a start time."
+                    ),
+                },
                 "due_at": {
                     "type": "string",
-                    "description": "ISO 8601 deadline (e.g. '2026-04-19T23:59:00'). Optional.",
+                    "description": (
+                        "ISO 8601 deadline — when the task must be finished by "
+                        "(e.g. '2026-04-19T23:59:00'). Optional. This is NOT a start time."
+                    ),
                 },
                 "budget": {
                     "type": "string",
@@ -79,6 +94,7 @@ def _create_task(inputs: dict) -> dict:
         constraints["notes"] = inputs["notes"]
 
     owner = inputs.get("owner_chat_id") or str(_get_active_user() or "")
+    start_at = inputs.get("start_at") or None
 
     task_id = task_store.create_task(
         title=inputs["title"],
@@ -86,15 +102,21 @@ def _create_task(inputs: dict) -> dict:
         constraints=constraints,
         owner_chat_id=owner or None,
         due_at=inputs.get("due_at") or None,
+        start_at=start_at,
     )
 
-    return {
-        "task_id": task_id,
-        "message": (
+    if start_at:
+        msg = (
+            f"Task created (id: {task_id}). I'll start working on it at {start_at} "
+            f"and ping you with updates. Use /tasks to check status anytime."
+        )
+    else:
+        msg = (
             f"Task created (id: {task_id}). I'll plan and start working on it in the background "
             f"and will ping you with updates. Use /tasks to check status anytime."
-        ),
-    }
+        )
+
+    return {"task_id": task_id, "message": msg}
 
 
 # ---------------------------------------------------------------------------
