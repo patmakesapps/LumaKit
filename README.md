@@ -2,37 +2,62 @@
 
 ![LumaKit Logo](photos/lumakit_cat_logo.png)
 
-LumaKit is a local AI agent that talks to an Ollama model and gives it access to repo, runtime, web, and communication tools. It runs as a background service and can be controlled from Telegram, the CLI, or autonomously via the task runner.
+**A local-first AI agent that runs on your own hardware, powered by [Ollama](https://ollama.com), and controlled from your phone via Telegram.**
+
+LumaKit gives a local LLM a full tool suite — repo ops, shell and Python execution, web search, a headless browser with persistent logins, email, screen capture, and more — and can work autonomously in the background while you live your life. Everything stays on your machine. No OpenAI, no Anthropic, no cloud round-trips. Your model, your data, your rules.
+
+---
+
+## Why Telegram?
+
+Telegram turns LumaKit into a proper assistant — always in your pocket, always on.
+
+- **Message from anywhere.** Your agent is a DM away, whether you're at your desk or out walking the dog.
+- **Photos in, photos out.** Drop in an image and ask what it is (vision-capable models only). Ask Lumi to screenshot her progress and she sends it back.
+- **Voice in, voice out.** Record a voice note and Lumi transcribes it locally via `whisper.cpp`, replies, and optionally reads the reply back as an Edge-TTS voice memo.
+- **Household-ready.** Multi-user support with owner/admin controls. Everyone gets their own conversation history, personality overrides, and reminders.
+- **Autonomy that reports back.** Kick off a multi-hour task and Lumi pings you when it's blocked, and again when it's done.
+
+## Powered by Ollama
+
+LumaKit talks exclusively to a local Ollama endpoint (`http://localhost:11434` by default). Tool-calling quality is largely a function of your model choice:
+
+- **Opus-class models** (e.g. `qwen3`, `llama3.3`, `gpt-oss`) handle multi-step tool chains reliably.
+- **Smaller models** answer basic prompts fine but may stumble on tool argument formatting or long tool loops.
+- A `OLLAMA_FALLBACK_MODEL` can be configured so Lumi auto-degrades if the primary is down or overloaded.
+- An optional `OLLAMA_LOCAL_MODEL` can be toggled on the fly from Telegram with `/model`.
+
+If a tool seems inconsistent, try a stronger model before assuming the tool is broken.
+
+---
 
 ## Features
 
-- **Tool-calling agent** — loads tools automatically from `tools/` and lets the model call them in multi-round loops
-- **Autonomous task runner** — give Lumi a goal and a deadline; it plans, executes steps, self-evaluates, and reports back. Survives restarts — all state is persisted in SQLite
-- **CLI interface** — interactive chat with slash commands, clipboard image pasting, chat persistence, and storage management
-- **Telegram bridge** — chat with LumaKit from your phone; supports multiple authorized users, photo/vision analysis, optional local voice-note transcription (whisper.cpp), optional `edge-tts` voice replies (sent as voice memos), and admin controls
-- **Autonomous email** — give the agent its own Gmail account; it polls every 60s, drafts replies for the owner, and requires one-tap approval before sending (owner-only, with codebase-leak filter, rate limiting, and URL stripping). See [docs/gmail_setup.md](docs/gmail_setup.md)
-- **Identity file** — `lumi/identity.txt` stores Lumi's own accounts and credentials; surfaced in the system prompt so Lumi checks it before signing up for new services and appends new accounts after creating them
-- **Family & personal reminders** — per-user reminders plus household-wide broadcasts. See [docs/family_alerts.md](docs/family_alerts.md)
-- **Screenshot tool** — the agent can grab the current screen and push it to the owner on Telegram
-- **Heartbeat** — background check-ins from Lumi when the owner has been quiet
-- **Code intelligence** — built-in code index using tree-sitter for symbol lookup, definition finding, usage search, and call graphs
-- **Memory & reminders** — persistent SQLite memory store and a background reminder system
-- **Context management** — automatic conversation summarization to keep context lean
-- **Storage budgeting** — tracks local data usage with configurable budgets and cleanup prompts
-- **Fallback model support** — automatically falls back to a secondary Ollama model if the primary is unavailable
-- **Image/vision support** — send images via CLI (`/p`, `/image`) or Telegram photos for vision-capable models
+- **Tool-calling agent** — auto-discovers tools from `tools/` and runs the model in multi-round tool-use loops.
+- **Autonomous task runner** — give Lumi a goal and a deadline; she plans, executes, self-evaluates, and reports back. All state persisted in SQLite so tasks survive restarts.
+- **Telegram bridge** — primary user interface. Multi-user, photo/vision, voice in/out, admin controls.
+- **CLI interface** — interactive chat with slash commands, clipboard image pasting, chat history, storage management.
+- **Autonomous email** — give the agent its own Gmail account; she polls every 60s, drafts replies, and requires one-tap approval before sending. Owner-only, with codebase-leak filtering, rate limiting, and URL stripping. See [docs/gmail_setup.md](docs/gmail_setup.md).
+- **Headless browser** — Playwright + Chromium, driven by the model. Form introspection (`inspect_forms`) hands the model real verified selectors so it can fill React/SPA pages without guessing.
+- **Persistent browser auth profiles** — log in once to a site (Instagram, Gmail, anything); cookies + localStorage are saved to `~/.lumakit/browser_profiles/<name>.json` and automatically reloaded on subsequent calls. No more re-login every run.
+- **Instagram ops** — a thin `instagram_session` tool + self-maintained `instagram/notes.md` (selectors, UI quirks, shortcuts) keep Lumi productive on Instagram across sessions. See [Instagram](#instagram) below.
+- **Identity file** — `lumi/identity.txt` stores Lumi's own accounts and credentials; surfaced in the system prompt so she checks it before signing up for anything new and appends new accounts after creating them.
+- **Family & personal reminders** — per-user reminders plus household-wide broadcasts. See [docs/family_alerts.md](docs/family_alerts.md).
+- **Screenshot tool** — the agent can grab the current screen and push it to the owner over Telegram.
+- **Heartbeat** — background check-ins when the owner has been quiet.
+- **Code intelligence** — tree-sitter-backed symbol table for definition lookup, usage search, and call graphs.
+- **Memory & reminders** — persistent SQLite memory store and a background reminder thread.
+- **Context management** — automatic conversation summarization to keep context lean.
+- **Storage budgeting** — tracks local data usage with configurable budgets and cleanup prompts.
 
-## Model Note
-
-Tool calling quality depends heavily on the model you run through Ollama. Smaller models may answer basic prompts fine, but they can be less reliable when choosing tools, formatting arguments, or handling multi-step loops. If a tool seems inconsistent, test with a stronger model before assuming the tool is broken.
+---
 
 ## Requirements
 
 - Python 3.10+
-- Ollama running locally at `http://localhost:11434`
-- An Ollama model pulled locally
-- `ffmpeg` recommended if you plan to work with Telegram audio frequently
-- For Telegram speech: local `whisper.cpp` build plus `edge-tts` installed in the same Python environment you use to run the bridge
+- [Ollama](https://ollama.com) running locally at `http://localhost:11434` with at least one model pulled
+- `ffmpeg` if you plan to work with Telegram audio regularly
+- For Telegram speech: a local `whisper.cpp` build plus `edge-tts` installed in the same Python environment
 
 Install dependencies:
 
@@ -90,6 +115,8 @@ CLI commands:
 
 ### Telegram Bridge
 
+First-time setup: follow [docs/telegram_setup.md](docs/telegram_setup.md) to create your bot, authorize yourself and your household, and (optionally) wire up local voice STT/TTS.
+
 ```bash
 python telegram_bridge.py
 ```
@@ -103,22 +130,22 @@ Telegram commands:
 | `/help` | Show available commands |
 | `/chats` | List and resume saved conversations |
 | `/new` | Start a fresh conversation |
+| `/stop` | Interrupt Lumi mid-task |
 | `/status` | Show model, storage, and index info |
 | `/tasks` | List autonomous background tasks |
 | `/task <id>` | Show details and history for a specific task |
 | `/voice ...` | Enable audio replies, list voices, or set your preferred Edge voice |
 | `/adduser` | (Owner only) Authorize a new user |
 | `/removeuser` | (Owner only) Remove an authorized user |
-| `/model` | (Owner only) Open a Telegram menu to change the owner's primary, fallback, or local-model mode |
+| `/model` | (Owner only) Change the owner's primary, fallback, or local-model mode |
 | `/personality` | View or change your own Telegram personality override |
 | `/users` | (Owner only) List authorized users |
 
-You can also send photos directly — LumaKit will analyze them if the model supports vision.
-If local speech is configured, you can send Telegram voice notes or audio files and LumaKit will transcribe them before replying.
+Send photos directly — LumaKit will analyze them if the model supports vision. If local speech is configured, send voice notes or audio files and LumaKit will transcribe them before replying.
 
 ### Autonomous Tasks
 
-Tell Lumi a goal with a deadline and it will handle the rest:
+Tell Lumi a goal with a deadline and she handles the rest:
 
 > *"Research the best dividend ETFs available right now — compare yield, expense ratio, and 1-year return. Report back by tonight."*
 
@@ -126,12 +153,31 @@ Tell Lumi a goal with a deadline and it will handle the rest:
 
 Lumi will:
 1. Generate a step-by-step plan and confirm it with you
-2. Execute each step using its full tool suite (web search, browser, code execution, etc.)
+2. Execute each step using her full tool suite (web search, browser, code execution, etc.)
 3. Self-evaluate after each step and retry or escalate if stuck
 4. Ping you on Telegram when blocked and wait for your input
 5. Send a final report when done or when the deadline arrives
 
 Use `/tasks` to check status or `/task <id>` for full history. Tasks survive service restarts.
+
+---
+
+## Instagram
+
+Lumi can run a full Instagram account autonomously — posting, engaging, logging growth — while staying within realistic rate limits and IG's unwritten behavioral thresholds.
+
+The `instagram/` folder is **gitignored** (so private playbooks and media don't leak publicly), but you'll likely want to use it:
+
+- **`instagram/plan.md`** — Lumi's playbook. Voice, daily workflow, content pillars, rate caps, hard stops, never-dos. Edit this to tune her behavior.
+- **`instagram/notes.md`** — auto-created by the `instagram_session` tool on first use. Self-maintained: Lumi appends working selectors and UI quirks so she doesn't rediscover them every run.
+- **`instagram/log.md`** — Lumi's daily activity log, created on first run.
+- **`instagram/*.{png,jpg,mp4}`** — drop media here and Lumi will use it for her next post. If the folder is empty, she generates her own content.
+
+Login state lives in `~/.lumakit/browser_profiles/instagram.json` (Playwright `storage_state` — cookies + localStorage). Log in once via `browser_automation` with `auth_profile='instagram'`; all future runs land already authenticated until the session expires. Applies to any site, not just Instagram — use the same mechanism for Gmail, etc.
+
+See [docs/instagram_tips.md](docs/instagram_tips.md) for setup notes and gotchas.
+
+---
 
 ## Project Structure
 
@@ -171,10 +217,15 @@ tools/
   memory/               Memory and reminder tools (save, recall, remind)
   repo/                 File and git operations (read, write, edit, delete, search, diff, git)
   runtime/              Shell, Python, system tools (restart_service, storage, clipboard*)
-  web/                  HTTP fetch and web search
+  web/                  HTTP fetch, web search, headless browser (Playwright), instagram_session
 
 lumi/                   Lumi's private data — gitignored
   identity.txt          Lumi's accounts, credentials, and site logins
+
+instagram/              Lumi's Instagram playbook and activity — gitignored (see above)
+
+~/.lumakit/             Persistent per-user data (outside the repo)
+  browser_profiles/     Playwright storage_state files for persistent logins
 ```
 
 *Clipboard tools require a display and are not available in headless/server mode.*
