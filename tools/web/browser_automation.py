@@ -5,6 +5,7 @@ reading page text/links, uploading files, and submitting forms.
 """
 
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -17,10 +18,27 @@ from core.paths import get_repo_root
 # Don't launch Chromium if the machine is already under obvious memory pressure.
 _MIN_AVAILABLE_RAM = 1_000_000_000  # ~1 GiB
 _SESSION_IDLE_TIMEOUT_SECONDS = 20 * 60
+_BROWSER_PROFILES_DIR = Path.home() / '.lumakit' / 'browser_profiles'
 
 _PLAYWRIGHT = None
 _BROWSER_SESSIONS = {}
 _SESSIONS_LOCK = threading.RLock()
+
+
+def _browser_profile_path(profile: str) -> Path:
+    """Resolve a persistent storage-state file path for the given profile name."""
+    safe = re.sub(r'[^A-Za-z0-9_.-]', '_', profile).strip('_.') or 'default'
+    return _BROWSER_PROFILES_DIR / f'{safe}.json'
+
+
+def _save_storage_state(context, path: Path) -> bool:
+    """Persist cookies + localStorage so the next launch starts logged in."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        context.storage_state(path=str(path))
+        return True
+    except Exception:
+        return False
 
 
 def _screenshots_dir() -> Path:
@@ -55,7 +73,7 @@ def _ensure_playwright_started():
         return _PLAYWRIGHT
 
 
-def _launch_browser_components(overall_timeout):
+def _launch_browser_components(overall_timeout, storage_state_path: Path | None = None):
     """Create a browser/context/page triple with the tool's standard settings."""
     available = _available_ram()
     if available is not None and available < _MIN_AVAILABLE_RAM:
@@ -76,13 +94,16 @@ def _launch_browser_components(overall_timeout):
             '--disable-background-timer-throttling',
         ],
     )
-    context = browser.new_context(
-        viewport={'width': 1280, 'height': 720},
-        user_agent=(
+    context_kwargs = {
+        'viewport': {'width': 1280, 'height': 720},
+        'user_agent': (
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
             '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         ),
-    )
+    }
+    if storage_state_path is not None and storage_state_path.exists():
+        context_kwargs['storage_state'] = str(storage_state_path)
+    context = browser.new_context(**context_kwargs)
     page = context.new_page()
     page.set_default_timeout(overall_timeout)
     return browser, context, page
@@ -96,6 +117,10 @@ def _close_browser_session_locked(session_id):
 
     context = session.get('context')
     browser = session.get('browser')
+    storage_state_path = session.get('storage_state_path')
+
+    if context is not None and storage_state_path is not None:
+        _save_storage_state(context, storage_state_path)
 
     if context is not None:
         try:
@@ -123,7 +148,7 @@ def _cleanup_stale_sessions():
             _close_browser_session_locked(session_id)
 
 
-def _get_or_create_browser_session(session_id, overall_timeout):
+def _get_or_create_browser_session(session_id, overall_timeout, storage_state_path: Path | None = None):
     """Return a persistent session keyed by session_id, creating it if needed."""
     _cleanup_stale_sessions()
     now = time.time()
@@ -146,13 +171,16 @@ def _get_or_create_browser_session(session_id, overall_timeout):
             except Exception:
                 _close_browser_session_locked(session_id)
 
-        browser, context, page = _launch_browser_components(overall_timeout)
+        browser, context, page = _launch_browser_components(
+            overall_timeout, storage_state_path=storage_state_path
+        )
         session = {
             'browser': browser,
             'context': context,
             'page': page,
             'created_at': now,
             'last_used': now,
+            'storage_state_path': storage_state_path,
         }
         _BROWSER_SESSIONS[session_id] = session
         return session, True
@@ -187,7 +215,8 @@ def get_browser_automation_tool():
             '6. The result always includes page_text_snippet and final_url so you can verify where you ended up before claiming success. If final_url still looks like the form page after a submit, the submit probably failed — inspect and try again.\n'
             '7. A final screenshot is saved to disk; use send_photo_telegram to forward it to the user.\n'
             '8. For multi-step logged-in flows, pass a session_id. The tool will keep that browser session alive across calls so cookies and page state survive. On later calls, omit url if you want to continue on the current page without reloading.\n'
-            '9. To upload a local file (for example a profile picture), use the set_input_files action with value set to the file path.'
+            '9. To upload a local file (for example a profile picture), use the set_input_files action with value set to the file path.\n'
+            '10. For sites where you need to stay logged in across process restarts (Instagram, Gmail, etc.), pass auth_profile=<name>. On first use, log in normally — cookies and localStorage are saved to disk after the call. On every subsequent use with the same name, the browser launches already logged in. session_id and auth_profile are complementary: session_id keeps a browser alive in memory across back-to-back calls; auth_profile persists login state to disk across everything.'
         ),
         'inputSchema': {
             'type': 'object',
@@ -258,6 +287,10 @@ def get_browser_automation_tool():
                 'close_session': {
                     'type': 'boolean',
                     'description': 'If true and session_id is set, close that persistent session after the actions finish.'
+                },
+                'auth_profile': {
+                    'type': 'string',
+                    'description': 'Optional persistent auth profile name (e.g. "instagram", "gmail"). Loads saved cookies/localStorage from ~/.lumakit/browser_profiles/<name>.json at launch and saves fresh state back after every successful call. Use this whenever you need to stay logged in across process restarts.'
                 },
                 'screenshot': {
                     'type': 'boolean',
@@ -401,6 +434,8 @@ def _browser_automation(inputs):
     close_session = bool(inputs.get('close_session', False))
     take_screenshot = inputs.get('screenshot', True)
     overall_timeout = inputs.get('timeout', 30) * 1000
+    auth_profile = (inputs.get('auth_profile') or '').strip() or None
+    storage_state_path = _browser_profile_path(auth_profile) if auth_profile else None
 
     results = {
         'url': url,
@@ -425,14 +460,27 @@ def _browser_automation(inputs):
 
     try:
         if session_id:
-            session, created = _get_or_create_browser_session(session_id, overall_timeout)
+            session, created = _get_or_create_browser_session(
+                session_id, overall_timeout, storage_state_path=storage_state_path
+            )
             browser = session['browser']
             context = session['context']
             page = session['page']
+            # Use the profile bound to the session at creation time so we keep
+            # saving to the same file even if later calls omit auth_profile.
+            storage_state_path = session.get('storage_state_path') or storage_state_path
             results['session_id'] = session_id
             results['session_reused'] = not created
         else:
-            browser, context, page = _launch_browser_components(overall_timeout)
+            browser, context, page = _launch_browser_components(
+                overall_timeout, storage_state_path=storage_state_path
+            )
+
+        if auth_profile:
+            results['auth_profile'] = auth_profile
+            results['auth_profile_loaded'] = bool(
+                storage_state_path and storage_state_path.exists()
+            )
 
         if url:
             page.goto(url, wait_until='domcontentloaded')
@@ -553,6 +601,9 @@ def _browser_automation(inputs):
         results['final_url'] = page.url
         results['final_title'] = page.title()
         results['success'] = True
+
+        if storage_state_path is not None:
+            results['auth_profile_saved'] = _save_storage_state(context, storage_state_path)
 
         if session_id:
             with _SESSIONS_LOCK:
