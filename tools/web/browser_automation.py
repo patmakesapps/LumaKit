@@ -73,6 +73,24 @@ def _ensure_playwright_started():
         return _PLAYWRIGHT
 
 
+def _stop_playwright_if_idle_locked():
+    """Shut down the Playwright driver if no sessions are alive.
+
+    The driver node otherwise lives for the life of the Python process,
+    holding ~110 MB RSS even when Lumi isn't browsing. Caller must hold
+    _SESSIONS_LOCK. _ensure_playwright_started() will re-launch it lazily
+    on the next call.
+    """
+    global _PLAYWRIGHT
+    if _PLAYWRIGHT is None or _BROWSER_SESSIONS:
+        return
+    try:
+        _PLAYWRIGHT.stop()
+    except Exception:
+        pass
+    _PLAYWRIGHT = None
+
+
 def _launch_browser_components(overall_timeout, storage_state_path: Path | None = None):
     """Create a browser/context/page triple with the tool's standard settings."""
     available = _available_ram()
@@ -631,5 +649,8 @@ def _browser_automation(inputs):
                     browser.close()
                 except Exception:
                     pass
+
+        with _SESSIONS_LOCK:
+            _stop_playwright_if_idle_locked()
 
     return results
