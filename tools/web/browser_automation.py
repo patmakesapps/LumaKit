@@ -361,7 +361,7 @@ def _inspect_forms(page, selector=None):
                 suggested_selector: pick(el),
             };
             if (entry.text && entry.text.length > 80) {
-                entry.text = entry.text[:80] + '...';
+                entry.text = entry.text.slice(0, 80) + '...';
             }
             out.push(entry);
         });
