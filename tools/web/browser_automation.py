@@ -12,13 +12,13 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from core.paths import get_repo_root
+from core.paths import get_data_dir, get_repo_root
 
 
 # Don't launch Chromium if the machine is already under obvious memory pressure.
 _MIN_AVAILABLE_RAM = 1_000_000_000  # ~1 GiB
 _SESSION_IDLE_TIMEOUT_SECONDS = 20 * 60
-_BROWSER_PROFILES_DIR = Path.home() / '.lumakit' / 'browser_profiles'
+_BROWSER_PROFILES_DIR = get_data_dir() / 'browser_profiles'
 
 _PLAYWRIGHT = None
 _BROWSER_SESSIONS = {}
@@ -42,8 +42,8 @@ def _save_storage_state(context, path: Path) -> bool:
 
 
 def _screenshots_dir() -> Path:
-    """Return the repo's screenshots/ folder, creating it if needed."""
-    path = get_repo_root() / "screenshots"
+    """Return the screenshots folder, creating it if needed."""
+    path = get_data_dir() / "screenshots"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

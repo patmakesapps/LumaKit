@@ -4,10 +4,10 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
+from core.paths import get_data_dir
 from tools.code_intel.symbol_table import Reference, Symbol, SymbolTable
 
 
-CACHE_DIR_NAME = ".lumakit"
 CACHE_FILE = "code_index.json"
 
 
@@ -25,7 +25,7 @@ def _hash_file(path: str) -> str:
 
 class IndexCache:
     def __init__(self, project_root: Path):
-        self.cache_dir = project_root / CACHE_DIR_NAME
+        self.cache_dir = get_data_dir()
         self.cache_path = self.cache_dir / CACHE_FILE
 
     def save(self, table: SymbolTable, references: list[Reference],

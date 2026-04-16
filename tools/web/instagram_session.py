@@ -13,18 +13,18 @@ Lumi maintains the notes herself by calling this tool again with add_note=<learn
 from datetime import datetime
 from pathlib import Path
 
-from core.paths import get_repo_root
+from core.paths import get_data_dir
 
 
 _PROFILE_NAME = 'instagram'
 
 
 def _profile_path() -> Path:
-    return Path.home() / '.lumakit' / 'browser_profiles' / f'{_PROFILE_NAME}.json'
+    return get_data_dir() / 'browser_profiles' / f'{_PROFILE_NAME}.json'
 
 
 def _notes_path() -> Path:
-    return get_repo_root() / 'instagram' / 'notes.md'
+    return get_data_dir() / 'instagram' / 'notes.md'
 
 
 _SEED_NOTES = """# Instagram session notes

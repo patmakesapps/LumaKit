@@ -1,10 +1,11 @@
 """Persistent per-user Telegram personality settings."""
 
 import json
-from pathlib import Path
+
+from core.paths import get_data_dir
 
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / ".lumakit" / "telegram_user_config.json"
+CONFIG_PATH = get_data_dir() / "telegram_user_config.json"
 
 
 def load_user_configs():

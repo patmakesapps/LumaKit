@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+from core.paths import get_data_dir
+
 
 DEFAULT_BUDGET_MB = 50
 WARN_THRESHOLD = 0.8  # warn at 80% of budget
@@ -18,9 +20,10 @@ class StorageManager:
         self._last_milestone: int | None = None  # last milestone % we alerted on
 
         # Known storage locations
+        data = get_data_dir()
         self.stores = {
-            "memory.db": project_root / "memory" / "memory.db",
-            "index_cache": project_root / ".lumakit" / "code_index.json",
+            "memory.db": data / "memory" / "memory.db",
+            "index_cache": data / "code_index.json",
         }
 
     def get_usage(self) -> dict[str, dict]:

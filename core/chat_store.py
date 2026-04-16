@@ -2,9 +2,11 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime
-from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "memory" / "memory.db"
+from core.paths import get_data_dir
+
+
+DB_PATH = get_data_dir() / "memory" / "memory.db"
 
 
 def _connect():

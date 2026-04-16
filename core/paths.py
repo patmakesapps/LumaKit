@@ -1,6 +1,80 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
+
+_data_dir: Path | None = None
+_migration_done = False
+
+
+def get_data_dir() -> Path:
+    """Return the user data directory (~/.lumakit/), creating it on first call.
+
+    On the very first call, if old data directories exist in the repo root
+    but ~/.lumakit/ is fresh, migrate them automatically.
+    """
+    global _data_dir
+    if _data_dir is None:
+        _data_dir = Path.home() / ".lumakit"
+        _data_dir.mkdir(exist_ok=True)
+        _maybe_migrate()
+    return _data_dir
+
+
+def _maybe_migrate():
+    """One-time migration: copy old repo-rooted data dirs into ~/.lumakit/."""
+    global _migration_done
+    if _migration_done:
+        return
+    _migration_done = True
+
+    repo = get_repo_root()
+    data = Path.home() / ".lumakit"
+
+    # Map old repo-root paths → new data-dir paths
+    migrations = {
+        repo / "memory":    data / "memory",
+        repo / "lumi":      data / "identity",
+        repo / "instagram": data / "instagram",
+    }
+
+    # Also migrate repo-root .lumakit/ config files (telegram configs, etc.)
+    # but NOT code_index.json (it's cache, will regenerate)
+    old_dot = repo / ".lumakit"
+    config_files = [
+        "telegram_users.json",
+        "telegram_owner_config.json",
+        "telegram_user_config.json",
+        "config.json",
+    ]
+
+    migrated_any = False
+
+    for old_path, new_path in migrations.items():
+        if old_path.exists() and old_path.is_dir() and not new_path.exists():
+            shutil.copytree(str(old_path), str(new_path))
+            migrated_any = True
+
+    for fname in config_files:
+        old_file = old_dot / fname
+        new_file = data / fname
+        if old_file.exists() and not new_file.exists():
+            shutil.copy2(str(old_file), str(new_file))
+            migrated_any = True
+
+    # Migrate browser_profiles if they were already in .lumakit/
+    old_profiles = old_dot / "browser_profiles"
+    new_profiles = data / "browser_profiles"
+    if old_profiles.exists() and old_profiles.is_dir() and not new_profiles.exists():
+        shutil.copytree(str(old_profiles), str(new_profiles))
+        migrated_any = True
+
+    if migrated_any:
+        print(
+            f"[LumaKit] Migrated user data to {data}\n"
+            "  Old data in the repo root is still intact — you can remove it "
+            "once you've confirmed everything works."
+        )
 
 
 def get_repo_root() -> Path:

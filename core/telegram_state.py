@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import os
 
+from core.paths import get_data_dir
 from core.telegram_owner_config import load_owner_config, save_owner_config
 from core.telegram_user_config import load_user_configs, save_user_configs
 from core.chat_store import new_chat_id
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".lumakit", "telegram_users.json")
+USERS_FILE = str(get_data_dir() / "telegram_users.json")
 
 _raw_ids = os.getenv("TELEGRAM_ALLOWED_IDS", "").strip()
 _env_id_list = [id.strip() for id in _raw_ids.split(",") if id.strip()]

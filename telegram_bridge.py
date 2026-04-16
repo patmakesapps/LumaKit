@@ -13,9 +13,14 @@ import sys
 import time
 import urllib.error
 
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load config.env from ~/.lumakit/ first (user overrides), then repo-root .env
+_user_env = Path.home() / ".lumakit" / "config.env"
+if _user_env.exists():
+    load_dotenv(_user_env)
+load_dotenv()  # repo-root .env — won't override keys already set
 
 from agent import Agent
 from core import auth, cli as cli_module

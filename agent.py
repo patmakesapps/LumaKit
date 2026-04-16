@@ -6,7 +6,7 @@ from pathlib import Path
 
 from core.cli import DIM, Spinner, _c, confirm, render_diff, show_tool_call, show_tool_result
 from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
-from core.paths import get_repo_root
+from core.paths import get_data_dir, get_repo_root
 from ollama_client import OllamaClient, OllamaConnectionError, OllamaTimeoutError
 from tool_registry import ToolRegistry
 from core.summarizer import apply_summary, build_summary_request, needs_summarization
@@ -394,7 +394,7 @@ class Agent:
         # Lumi's own email account — surfaced so the LLM knows what to use
         # when a web task asks for "an email address" (signups, newsletters, etc.)
         lumi_email = os.getenv("LUMI_EMAIL_ADDRESS", "").strip()
-        identity_file = root / "lumi" / "identity.txt"
+        identity_file = get_data_dir() / "identity" / "identity.txt"
         identity_block = (
             f"Your own email address: {lumi_email}\n"
             "  When a web task (signup, newsletter, form) asks for an email, use YOUR address above — "

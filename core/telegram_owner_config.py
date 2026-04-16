@@ -1,10 +1,11 @@
 """Persistent Telegram owner-only runtime config."""
 
 import json
-from pathlib import Path
+
+from core.paths import get_data_dir
 
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / ".lumakit" / "telegram_owner_config.json"
+CONFIG_PATH = get_data_dir() / "telegram_owner_config.json"
 
 DEFAULT_CONFIG = {
     "primary_model": "",

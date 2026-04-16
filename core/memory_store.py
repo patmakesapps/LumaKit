@@ -1,9 +1,9 @@
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 
-# Database lives at memory/memory.db in the project root
-DB_PATH = Path(__file__).resolve().parent.parent / "memory" / "memory.db"
+from core.paths import get_data_dir
+
+DB_PATH = get_data_dir() / "memory" / "memory.db"
 
 
 def _connect():

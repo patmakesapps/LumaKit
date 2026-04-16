@@ -160,7 +160,8 @@ def cmd_status(args: str, agent, session: dict):
 
 
 def cmd_config(args: str, agent, session: dict):
-    config_path = agent.code_index.root / ".lumakit" / "config.json"
+    from core.paths import get_data_dir
+    config_path = get_data_dir() / "config.json"
 
     if args.strip().lower().startswith("set"):
         _config_set(args, config_path, agent)

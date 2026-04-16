@@ -399,7 +399,8 @@ class TaskRunner:
         identity_parts = []
         if lumi_email:
             identity_parts.append(f"Your email address: {lumi_email}")
-        identity_file = Path(__file__).resolve().parent.parent / "lumi" / "identity.txt"
+        from core.paths import get_data_dir
+        identity_file = get_data_dir() / "identity" / "identity.txt"
         if identity_file.exists():
             identity_parts.append(
                 f"Your identity file (existing accounts & credentials): {identity_file} — "
