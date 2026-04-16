@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LumaKit</title>
+    <link rel="icon" href="/photos/lumakit_cat.png" type="image/png">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+</head>
+<body>
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+            <img src="/photos/lumakit_cat.png" alt="LumaKit" class="sidebar-logo">
+            <span class="sidebar-title">LumaKit</span>
+        </div>
+        <button id="new-chat-btn" class="new-chat-btn">+ New Chat</button>
+        <nav id="chat-list" class="chat-list"></nav>
+        <div class="sidebar-footer">
+            <button id="nav-tasks" class="sidebar-nav-btn">Tasks</button>
+            <button id="nav-settings" class="sidebar-nav-btn">Settings</button>
+        </div>
+    </aside>
+
+    <!-- Main content -->
+    <main id="main" class="main">
+        <!-- Topbar -->
+        <header id="topbar" class="topbar">
+            <button id="sidebar-toggle" class="sidebar-toggle">&#9776;</button>
+            <span id="topbar-title" class="topbar-title">New Chat</span>
+            <div class="topbar-right">
+                <span id="model-badge" class="model-badge"></span>
+                <span id="status-dot" class="status-dot"></span>
+            </div>
+        </header>
+
+        <!-- Chat view -->
+        <div id="chat-view" class="view active chat-view-centered">
+            <div id="messages" class="messages">
+                <div id="empty-state" class="empty-state">
+                    <img src="/photos/lumakit_cat_logo.png" alt="LumaKit" class="empty-logo">
+                    <p>What can I help you with?</p>
+                </div>
+            </div>
+            <div id="composer" class="composer">
+                <textarea id="input" class="composer-input" placeholder="Message Lumi..." rows="1"></textarea>
+                <button id="send-btn" class="composer-btn send-btn" title="Send">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+                </button>
+                <button id="stop-btn" class="composer-btn stop-btn hidden" title="Stop">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Task view -->
+        <div id="task-view" class="view">
+            <div class="panel-content">
+                <h2>Tasks</h2>
+                <div id="task-list" class="task-list"></div>
+            </div>
+        </div>
+
+        <!-- Settings view -->
+        <div id="settings-view" class="view">
+            <div class="panel-content">
+                <h2>Settings</h2>
+                <div id="settings-content" class="settings-content"></div>
+            </div>
+        </div>
+
+        <!-- Confirm modal -->
+        <div id="confirm-modal" class="confirm-modal hidden">
+            <div class="confirm-box">
+                <p id="confirm-prompt"></p>
+                <div class="confirm-actions">
+                    <button id="confirm-yes" class="confirm-btn confirm-yes">Approve</button>
+                    <button id="confirm-no" class="confirm-btn confirm-no">Deny</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

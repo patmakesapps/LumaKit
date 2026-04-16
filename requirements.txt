@@ -12,3 +12,5 @@ tree-sitter-languages==1.10.2
 playwright
 pyyaml
 regex
+fastapi
+uvicorn[standard]
