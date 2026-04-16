@@ -7,6 +7,7 @@ import { WS } from './lib/ws.js';
 
 // --- DOM refs ---
 const $messages = document.getElementById('messages');
+const $messagesInner = document.getElementById('messages-inner');
 const $emptyState = document.getElementById('empty-state');
 const $input = document.getElementById('input');
 const $sendBtn = document.getElementById('send-btn');
@@ -53,7 +54,6 @@ function renderMarkdown(text) {
     if (window.marked) {
         return marked.parse(text);
     }
-    // Fallback: escape HTML and convert newlines
     return text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -103,7 +103,7 @@ function addMessage(role, content) {
     bubble.innerHTML = renderMarkdown(content);
 
     div.appendChild(bubble);
-    $messages.appendChild(div);
+    $messagesInner.appendChild(div);
     scrollToBottom();
 
     // Highlight code blocks
@@ -124,7 +124,7 @@ function addToolCard(name, detail, isResult = false, isError = false) {
         div.innerHTML = `<span class="tool-name">${name}</span><span class="tool-detail">${detail || ''}</span>`;
     }
 
-    $messages.appendChild(div);
+    $messagesInner.appendChild(div);
     scrollToBottom();
 }
 
@@ -133,13 +133,12 @@ function showStatus(text) {
     statusEl = document.createElement('div');
     statusEl.className = 'status-msg';
     statusEl.textContent = text;
-    $messages.appendChild(statusEl);
+    $messagesInner.appendChild(statusEl);
     scrollToBottom();
 }
 
 function clearMessages() {
-    $messages.innerHTML = '';
-    $messages.appendChild($emptyState);
+    $messagesInner.innerHTML = '';
     $emptyState.classList.remove('hidden');
     enterCenteredMode();
 }
@@ -169,7 +168,6 @@ async function loadChatList() {
             item.textContent = chat.title || 'Untitled';
             item.onclick = () => {
                 ws.send({ type: 'load_chat', chat_id: chat.id });
-                // Close sidebar on mobile
                 $sidebar.classList.remove('open');
             };
             $chatList.appendChild(item);
@@ -294,11 +292,9 @@ const ws = new WS({
         $topbarTitle.textContent = data.title || 'New Chat';
         clearMessages();
 
-        // If there are real messages, exit centered mode
         const hasMessages = (data.messages || []).some(m => m.role === 'user' || m.role === 'assistant');
         if (hasMessages) exitCenteredMode();
 
-        // Render existing messages (skip system messages)
         for (const msg of data.messages || []) {
             if (msg.role === 'system') continue;
             if (msg.role === 'tool') continue;
@@ -325,9 +321,10 @@ $confirmNo.onclick = () => {
 };
 
 // --- Send message ---
+// Users can send multiple messages in a row without waiting for a response.
 function sendMessage() {
     const text = $input.value.trim();
-    if (!text || isWorking) return;
+    if (!text) return;
 
     addMessage('user', text);
     ws.send({ type: 'message', text });
