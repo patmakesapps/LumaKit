@@ -8,7 +8,7 @@ import os
 from core.paths import get_data_dir
 from core.telegram_owner_config import load_owner_config, save_owner_config
 from core.telegram_user_config import load_user_configs, save_user_configs
-from core.chat_store import new_chat_id
+from core.chat_store import get_active_chat, load_chat, new_chat_id
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 USERS_FILE = str(get_data_dir() / "telegram_users.json")
@@ -65,12 +65,26 @@ def _save_allowed_ids():
 def _get_session(chat_id):
     chat_id = str(chat_id)
     if chat_id not in _sessions:
-        _sessions[chat_id] = {
-            "chat_id": new_chat_id(),
-            "title": "",
-            "first_message_sent": False,
-            "messages": None,
-        }
+        # Cross-surface resume: if this user has an active chat from web/another
+        # surface, pick it up here so the conversation feels continuous.
+        resumed = None
+        active_id = get_active_chat(chat_id)
+        if active_id:
+            resumed = load_chat(active_id)
+        if resumed:
+            _sessions[chat_id] = {
+                "chat_id": resumed["id"],
+                "title": resumed["title"],
+                "first_message_sent": True,
+                "messages": resumed["messages"],
+            }
+        else:
+            _sessions[chat_id] = {
+                "chat_id": new_chat_id(),
+                "title": "",
+                "first_message_sent": False,
+                "messages": None,
+            }
     return _sessions[chat_id]
 
 

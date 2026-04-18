@@ -22,8 +22,44 @@ def _connect():
             messages TEXT NOT NULL
         )
     """)
+    # Per-user "active chat" pointer — lets any surface resume the current
+    # conversation on connect so Telegram ↔ web feels continuous.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS active_chats (
+            user_id TEXT PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
+
+
+def set_active_chat(user_id: str, chat_id: str) -> None:
+    """Mark this chat as the user's current active conversation."""
+    if not user_id or not chat_id:
+        return
+    conn = _connect()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT INTO active_chats (user_id, chat_id, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET chat_id = excluded.chat_id, updated_at = excluded.updated_at",
+        (str(user_id), str(chat_id), now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_active_chat(user_id: str) -> str | None:
+    """Return the user's current active chat id, or None if never set."""
+    if not user_id:
+        return None
+    conn = _connect()
+    row = conn.execute(
+        "SELECT chat_id FROM active_chats WHERE user_id = ?", (str(user_id),)
+    ).fetchone()
+    conn.close()
+    return row["chat_id"] if row else None
 
 
 def save_chat(chat_id: str, title: str, messages: list[dict]) -> str:

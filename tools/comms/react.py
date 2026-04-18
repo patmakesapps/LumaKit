@@ -1,19 +1,18 @@
 import json
 import os
 import urllib.request
+from contextvars import ContextVar
 
 
-# Set by the bridge/CLI before each user message
-_current_context = {
-    "chat_id": None,
-    "message_id": None,
-}
+# Per-turn: which chat/message the current run can react to.
+_react_chat_id: ContextVar[str | None] = ContextVar("lumakit_react_chat_id", default=None)
+_react_message_id: ContextVar[int | None] = ContextVar("lumakit_react_message_id", default=None)
 
 
 def set_react_context(chat_id, message_id):
     """Called by the bridge to set which message to react to."""
-    _current_context["chat_id"] = chat_id
-    _current_context["message_id"] = message_id
+    _react_chat_id.set(chat_id)
+    _react_message_id.set(message_id)
 
 
 # Emoji the model can pick from (Telegram requires these exact emoji strings)
@@ -61,8 +60,8 @@ def _react(inputs):
         return {"error": f"Unknown reaction '{reaction_key}'. Use one of: {', '.join(ALLOWED_REACTIONS.keys())}"}
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = _current_context["chat_id"]
-    message_id = _current_context["message_id"]
+    chat_id = _react_chat_id.get()
+    message_id = _react_message_id.get()
 
     if not token or not chat_id or not message_id:
         # CLI mode or no context — just report what we'd do

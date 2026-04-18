@@ -1,7 +1,7 @@
-"""Telegram bridge — lets you chat with LumaKit from your phone.
+"""Telegram surface — lets you chat with LumaKit from your phone.
 
-Run this instead of (or alongside) main.py:
-    python telegram_bridge.py
+Run with:
+    python -m surfaces.telegram
 
 Supports multiple users. Set TELEGRAM_ALLOWED_IDS in .env as a
 comma-separated list of Telegram chat IDs. The first ID is the owner
@@ -23,15 +23,12 @@ if _user_env.exists():
 load_dotenv()  # repo-root .env — won't override keys already set
 
 from agent import Agent
-from core import auth, cli as cli_module
-from core.chat_store import make_title, save_chat
-from core.cli import Spinner
-from core.email_checker import EmailChecker
-from core.heartbeat import Heartbeat
+from core import auth
+from core.chat_store import make_title, save_chat, set_active_chat
+from core.cli import Spinner, show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
+from core.display import DisplayHooks
 from core.interface_context import set_interface
-from core.reminder_checker import ReminderChecker
-from core.runtime_config import get_owner_effective_config
-from core.task_runner import TaskRunner
+from core.service import LumaKitService, Surface
 from core.telegram_api import (
     download_telegram_file,
     download_telegram_photo,
@@ -61,21 +58,18 @@ Spinner.start = lambda self: self
 Spinner.stop = lambda self: None
 
 # ---------------------------------------------------------------------------
-# Monkey-patch confirm and tool-call display into cli/agent modules
+# Telegram-specific DisplayHooks — forwards tool activity to the active chat
 # ---------------------------------------------------------------------------
-import agent as agent_module
-
-cli_module.confirm = telegram_confirm
-agent_module.confirm = telegram_confirm
-
-_original_show_tool_call = cli_module.show_tool_call
-_original_show_tool_result = cli_module.show_tool_result
 
 _show_tools: dict = {}  # {chat_id: bool}
 
+# Pass _show_tools into telegram_commands so /tools toggle works
+import core.telegram_state as _ts
+_ts._show_tools = _show_tools
+
 
 def _telegram_show_tool_call(tool_name, inputs):
-    _original_show_tool_call(tool_name, inputs)
+    _cli_show_tool_call(tool_name, inputs)
     chat_id = _active_chat_id["value"]
     if chat_id and _show_tools.get(chat_id):
         detail = ""
@@ -87,7 +81,7 @@ def _telegram_show_tool_call(tool_name, inputs):
 
 
 def _telegram_show_tool_result(result):
-    _original_show_tool_result(result)
+    _cli_show_tool_result(result)
     chat_id = _active_chat_id["value"]
     if chat_id and _show_tools.get(chat_id):
         if not result.get("success"):
@@ -104,14 +98,11 @@ def _telegram_show_tool_result(result):
                 send_message(f"📋 found {data['count']} result(s)", chat_id=chat_id)
 
 
-cli_module.show_tool_call = _telegram_show_tool_call
-cli_module.show_tool_result = _telegram_show_tool_result
-agent_module.show_tool_call = _telegram_show_tool_call
-agent_module.show_tool_result = _telegram_show_tool_result
-
-# Pass _show_tools into telegram_commands so /tools toggle works
-import core.telegram_state as _ts
-_ts._show_tools = _show_tools
+_telegram_display = DisplayHooks(
+    show_tool_call=_telegram_show_tool_call,
+    show_tool_result=_telegram_show_tool_result,
+    confirm=telegram_confirm,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -152,40 +143,29 @@ def main():
         verbose=verbose,
         status_callback=telegram_status,
         check_interrupt=check_for_stop,
+        display=_telegram_display,
     )
     speech_client = SpeechClient()
 
-    # --- Reminders ---
-    def notify_telegram(reminder):
-        target = reminder.get("chat_id")
-        if target:
-            send_message(f"🔔 Reminder: {reminder['content']}", chat_id=target)
-            print(f"[reminder -> {target}] {reminder['content']}")
-        else:
-            for uid in ALLOWED_IDS:
-                send_message(f"🔔 Family reminder: {reminder['content']}", chat_id=uid)
-            print(f"[family reminder] {reminder['content']}")
+    # --- Surface wiring: service owns reminders/tasks/heartbeat/email ---
+    def telegram_deliver(payload: dict) -> bool:
+        content = payload.get("content", "")
+        if not content:
+            return False
+        label = payload.get("label") or ""
+        text = f"🔔 {label}: {content}" if label else content
+        chat_id = payload.get("chat_id")
+        if chat_id:
+            send_message(text, chat_id=chat_id)
+            print(f"[{label.lower() or 'notify'} -> {chat_id}] {content[:200]}")
+            return True
+        # Broadcast (family reminder): every allowed user.
+        for uid in ALLOWED_IDS:
+            send_message(text, chat_id=uid)
+        print(f"[{label.lower() or 'notify'} broadcast] {content[:200]}")
+        return True
 
-    reminders = ReminderChecker(interval=30, notify=notify_telegram)
-    reminders.start()
-
-    # --- Task runner ---
-    def task_notify(msg: str, chat_id: str | None = None):
-        target = chat_id or OWNER_ID or (list(ALLOWED_IDS)[0] if ALLOWED_IDS else None)
-        if target:
-            send_message(msg, chat_id=target)
-            print(f"[task -> {target}] {msg[:120]}")
-
-    task_runner = TaskRunner(interval=60, notify=task_notify)
-    task_runner.start()
-
-    # --- Heartbeat ---
-    def heartbeat_send(msg):
-        target = OWNER_ID or list(ALLOWED_IDS)[0]
-        send_message(msg, chat_id=target)
-        print(f"[heartbeat] {msg[:200]}")
-
-    def heartbeat_inject_session(text):
+    def telegram_inject_session(text: str) -> None:
         target = OWNER_ID or (list(ALLOWED_IDS)[0] if ALLOWED_IDS else None)
         if not target:
             return
@@ -201,61 +181,22 @@ def main():
             session["title"] = make_title(text)
             session["first_message_sent"] = True
         save_chat(session["chat_id"], session["title"], session["messages"])
+        set_active_chat(str(target), session["chat_id"])
 
-    heartbeat_owner = OWNER_ID or (list(ALLOWED_IDS)[0] if ALLOWED_IDS else None)
-    heartbeat = Heartbeat(
-        send=heartbeat_send,
-        interval=900,
-        cooldown=3600,
-        inject_session=heartbeat_inject_session,
-        owner_chat_id=heartbeat_owner,
-    )
-    heartbeat.start()
-
-    # --- Email checker ---
-    def email_notify(msg):
-        target = OWNER_ID or list(ALLOWED_IDS)[0]
-        send_message(msg, chat_id=target)
-        print(f"[email -> {target}] {msg[:200]}")
-
-    def email_ask_llm(prompt):
-        from ollama_client import OllamaClient
-        owner_cfg = get_owner_effective_config(agent)
-        client = OllamaClient(fallback_model=owner_cfg["fallback_model"])
-        response = client.chat(
-            model=owner_cfg["primary_model"],
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-            deadline=90,
-        )
-        return response.get("message", {}).get("content", "").strip()
-
-    def email_inject_session(text):
-        target = OWNER_ID or list(ALLOWED_IDS)[0]
-        if not target:
-            return
-        session = _get_session(target)
-        if session["messages"] is None:
-            session["messages"] = [
-                agent.build_system_message(
-                    extra_instructions=_get_user_config(target).get("personality_prompt") or None
-                )
-            ]
-        session["messages"].append({"role": "assistant", "content": text})
-
-    email_checker = EmailChecker(
-        notify_owner=email_notify,
-        ask_llm=email_ask_llm,
-        inject_session=email_inject_session,
-        interval=60,
-    )
-    email_checker.start()
+    service = LumaKitService()
+    service.register_surface(Surface(
+        name="telegram",
+        deliver=telegram_deliver,
+        inject_session=telegram_inject_session,
+        is_owner=True,
+    ))
+    service.start()
 
     _AFFIRM = {"yes", "y", "yep", "yeah", "send", "send it", "do it", "ok", "okay", "sure"}
     _DENY = {"no", "n", "nah", "skip", "cancel", "nope", "don't", "dont"}
 
     def _handle_pending_draft(text, chat_id):
-        draft = email_checker.pending_draft
+        draft = service.email.pending_draft
         if not draft:
             return False
         if str(chat_id) != str(OWNER_ID):
@@ -264,14 +205,14 @@ def main():
         if normalized in _AFFIRM:
             from tools.comms.email import send_preapproved
             result = send_preapproved(draft["to"], draft["subject"], draft["body"])
-            email_checker.clear_pending_draft()
+            service.email.clear_pending_draft()
             if result.get("sent"):
                 send_message(f"✅ Sent to {draft['from_label']}.", chat_id=chat_id)
             else:
                 send_message(f"❌ Couldn't send: {result.get('error', 'unknown error')}", chat_id=chat_id)
             return True
         if normalized in _DENY:
-            email_checker.clear_pending_draft()
+            service.email.clear_pending_draft()
             send_message("👍 Skipped. Draft discarded.", chat_id=chat_id)
             return True
         return False
@@ -340,7 +281,7 @@ def main():
                 set_active_user(chat_id)
                 auth.set_active_user(chat_id)
                 set_interface("telegram", chat_id)
-                heartbeat.notify_activity()
+                service.notify_activity()
 
                 session = _get_session(chat_id)
                 swap_in(agent, session)
@@ -369,6 +310,7 @@ def main():
                             session["first_message_sent"] = True
                         if session["first_message_sent"] and len(agent.messages) > 1:
                             save_chat(session["chat_id"], session["title"], agent.messages)
+                            set_active_chat(chat_id, session["chat_id"])
                     except Exception as e:
                         error_msg = f"Error processing photo: {e}"
                         send_message(error_msg)
@@ -410,6 +352,7 @@ def main():
                             session["first_message_sent"] = True
                         if session["first_message_sent"] and len(agent.messages) > 1:
                             save_chat(session["chat_id"], session["title"], agent.messages)
+                            set_active_chat(chat_id, session["chat_id"])
                     except Exception as e:
                         error_msg = f"Error processing audio: {e}"
                         send_message(error_msg)
@@ -441,6 +384,7 @@ def main():
                         session["first_message_sent"] = True
                     if session["first_message_sent"] and len(agent.messages) > 1:
                         save_chat(session["chat_id"], session["title"], agent.messages)
+                        set_active_chat(chat_id, session["chat_id"])
                 except Exception as e:
                     error_msg = f"Error: {e}"
                     send_message(error_msg)
@@ -450,10 +394,8 @@ def main():
             for cid, sess in _sessions.items():
                 if sess["first_message_sent"] and sess["messages"] and len(sess["messages"]) > 1:
                     save_chat(sess["chat_id"], sess["title"], sess["messages"])
-            reminders.stop()
-            heartbeat.stop()
-            email_checker.stop()
-            task_runner.stop()
+                    set_active_chat(str(cid), sess["chat_id"])
+            service.stop()
             print("\nBridge stopped.")
             break
         except (socket.timeout, urllib.error.URLError):

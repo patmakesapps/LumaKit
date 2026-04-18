@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat
+from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat, set_active_chat
 from core.runtime_config import apply_user_runtime, get_owner_effective_config
 from core.telegram_io import poll_for_reply, send_message
 from core.telegram_state import (
@@ -31,7 +31,7 @@ def swap_in(agent, session):
     agent.messages = session["messages"]
 
 
-def resume_chat(chat_id_str, agent, session):
+def resume_chat(chat_id_str, agent, session, telegram_chat_id=None):
     """Load a saved conversation into the agent."""
     chat = load_chat(chat_id_str)
     if not chat:
@@ -44,6 +44,8 @@ def resume_chat(chat_id_str, agent, session):
     session["chat_id"] = chat["id"]
     session["title"] = chat["title"]
     session["first_message_sent"] = True
+    if telegram_chat_id:
+        set_active_chat(str(telegram_chat_id), chat["id"])
     send_message(f"Resumed: {chat['title']} ({len(chat['messages'])} messages)")
 
 
@@ -216,12 +218,12 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         try:
             pick = int(reply) - 1
             if 0 <= pick < len(chats):
-                resume_chat(chats[pick]["id"], agent, session)
+                resume_chat(chats[pick]["id"], agent, session, telegram_chat_id=chat_id)
                 apply_chat_runtime(agent, session, chat_id)
             else:
                 send_message("Invalid number.")
         except ValueError:
-            resume_chat(reply.strip(), agent, session)
+            resume_chat(reply.strip(), agent, session, telegram_chat_id=chat_id)
             apply_chat_runtime(agent, session, chat_id)
         return True
 
@@ -234,6 +236,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         system_msg = agent.messages[0] if agent.messages else None
         agent.messages = [system_msg] if system_msg else []
         session["messages"] = agent.messages
+        set_active_chat(str(chat_id), session["chat_id"])
         send_message("New conversation started.")
         return True
 

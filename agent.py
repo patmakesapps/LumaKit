@@ -4,7 +4,8 @@ import os
 import time
 from pathlib import Path
 
-from core.cli import DIM, Spinner, _c, confirm, render_diff, show_tool_call, show_tool_result
+from core.cli import DIM, Spinner, _c
+from core.display import DisplayHooks
 from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
 from core.interrupts import interrupt_context
 from core.paths import get_data_dir, get_repo_root
@@ -359,13 +360,15 @@ class Agent:
     ROUND_DEADLINE = 120        # seconds per LLM call
     ASK_LLM_TIMEOUT = 300      # overall wall-clock limit (5 min)
 
-    def __init__(self, verbose=False, status_callback=None, check_interrupt=None):
+    def __init__(self, verbose=False, status_callback=None, check_interrupt=None, display=None):
         self.verbose = verbose
         # Called with (message_text) to send progress updates mid-work
         self.status_callback = status_callback
         # Called between tool rounds to check if the user wants to stop.
         # Should return True if the run should be interrupted.
         self.check_interrupt = check_interrupt
+        # Per-surface UI hooks (tool call/result display, diff rendering, confirms)
+        self.display = display or DisplayHooks()
         # Set to True to abort the current ask_llm run on the next check.
         self.interrupt_requested = False
 
@@ -549,7 +552,7 @@ class Agent:
         if preview and preview.get("diff"):
             # For new file creation, skip the diff and show a simpler confirmation
             if tool_name == "write_file" and preview.get("is_new"):
-                if not confirm(f"Create {tool_inputs.get('path', 'file')}?"):
+                if not self.display.confirm(f"Create {tool_inputs.get('path', 'file')}?"):
                     return {
                         "success": True,
                         "data": {
@@ -558,8 +561,8 @@ class Agent:
                         },
                     }
             else:
-                print(render_diff(preview["diff"]))
-                if not confirm("Apply this change?"):
+                self.display.show_diff(preview["diff"])
+                if not self.display.confirm("Apply this change?"):
                     return {
                         "success": True,
                         "data": {
@@ -578,7 +581,7 @@ class Agent:
         """Show what a command/action tool will do and ask for confirmation."""
         reason = tool_inputs.get("reason")
         reason_text = f" — {reason}" if reason else ""
-        if not confirm(f"Allow {tool_name}?{reason_text}"):
+        if not self.display.confirm(f"Allow {tool_name}?{reason_text}"):
             return {
                 "success": True,
                 "data": {
@@ -602,7 +605,7 @@ class Agent:
         dest = data.get("destination_path", "?")
         kind = data.get("kind", "item")
 
-        if not confirm(f"Move {kind} {source} → {dest}?"):
+        if not self.display.confirm(f"Move {kind} {source} → {dest}?"):
             return {
                 "success": True,
                 "data": {
@@ -770,7 +773,7 @@ class Agent:
                         return {"message": {"role": "assistant", "content": stuck_msg}}
                     last_tool_key = tool_key
 
-                    show_tool_call(tool_name, tool_inputs)
+                    self.display.show_tool_call(tool_name, tool_inputs)
 
                     if tool_name in DIFF_TOOLS:
                         tool_result = self._handle_diff_tool(tool_name, tool_inputs)
@@ -784,7 +787,7 @@ class Agent:
                     if tool_result.get("interrupted") or self._check_interrupt():
                         return self._interrupt_response()
 
-                    show_tool_result(tool_result)
+                    self.display.show_tool_result(tool_result)
 
                     # Incrementally update code index when files change
                     if tool_name in ("edit_file", "write_file", "delete_file"):

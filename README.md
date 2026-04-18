@@ -106,7 +106,7 @@ Copy `.env.example` to `.env` and set the values you want to use.
 ### Web UI
 
 ```bash
-python web_bridge.py
+python -m surfaces.web
 ```
 
 Then open `http://localhost:7865` in your browser, or set `LUMAKIT_WEB_PORT` to use a different port.
@@ -120,18 +120,18 @@ The web UI supports:
 - inline reactions on user messages
 - inline delivered screenshots and images
 
-For now, the web UI is a separate runtime from Telegram. If you want both desktop and mobile access at the same time, run both `web_bridge.py` and `telegram_bridge.py`.
+For now, the web UI is a separate runtime from Telegram. If you want both desktop and mobile access at the same time, run both `surfaces.web` and `surfaces.telegram`.
 
 ### CLI
 
 ```bash
-python main.py
+python -m surfaces.cli
 ```
 
 Verbose mode:
 
 ```bash
-python main.py --verbose
+python -m surfaces.cli --verbose
 ```
 
 CLI commands:
@@ -148,7 +148,7 @@ CLI commands:
 First-time setup: follow [docs/telegram_setup.md](docs/telegram_setup.md) to create your bot, authorize yourself and your household, and (optionally) wire up local voice STT/TTS.
 
 ```bash
-python telegram_bridge.py
+python -m surfaces.telegram
 ```
 
 Or run as a systemd service (see [docs/autostart.md](docs/autostart.md)).
@@ -212,12 +212,14 @@ See [docs/instagram_tips.md](docs/instagram_tips.md) for setup notes and gotchas
 ## Project Structure
 
 ```
-main.py                 CLI entry point
 agent.py                Core agent loop (tool dispatch, diff preview, confirmation)
 ollama_client.py        Ollama HTTP client with fallback and timeout support
-telegram_bridge.py      Telegram bridge entry point — poll loop and background services
-web_bridge.py           Web UI bridge entry point — FastAPI app + WebSocket chat surface
 tool_registry.py        Auto-discovers and registers tools from tools/
+
+surfaces/
+  cli.py                CLI entry point (python -m surfaces.cli)
+  telegram.py           Telegram surface — poll loop + session handling
+  web.py                Web UI surface — FastAPI app + WebSocket chat
 
 core/
   auth.py               Owner gating (used by email tools)
@@ -235,6 +237,8 @@ core/
   paths.py              Repo root detection and path resolution
   reminder_checker.py   Background reminder polling thread
   runtime_config.py     Shared per-surface/per-user runtime model configuration
+  service.py            LumaKitService — owns background workers + NotificationRouter
+  display.py            DisplayHooks — per-surface UI callbacks for the agent
   storage.py            Storage budget tracking
   summarizer.py         Conversation summarization logic
   task_runner.py        Autonomous task execution engine — plan, execute, evaluate, report

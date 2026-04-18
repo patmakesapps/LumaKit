@@ -1,4 +1,5 @@
 import os
+from contextvars import ContextVar
 from datetime import datetime
 
 from core import memory_store
@@ -6,17 +7,17 @@ from core.runtime_config import get_effective_config_for_user
 from ollama_client import OllamaClient
 
 
-# Set by the bridge before each user message. None in CLI mode.
-_active_user = {"value": None}
+# Per-turn: who is currently talking to the agent. None in CLI mode.
+_active_user: ContextVar[str | None] = ContextVar("lumakit_memory_active_user", default=None)
 
 
 def set_active_user(chat_id):
     """Called by the bridge to mark who's currently talking to the agent."""
-    _active_user["value"] = str(chat_id) if chat_id is not None else None
+    _active_user.set(str(chat_id) if chat_id is not None else None)
 
 
 def _get_active_user():
-    return _active_user["value"]
+    return _active_user.get()
 
 
 def _parse_notify_at(value: str) -> str | None:

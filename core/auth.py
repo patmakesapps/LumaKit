@@ -1,31 +1,37 @@
-"""Shared auth state — tracks who is currently talking and who the owner is.
+"""Shared auth state.
 
-Tools that should only run for the owner (e.g. email) call is_owner_active()
-before doing anything. The telegram bridge sets the owner at startup and
-updates the active user each turn.
+`owner` is process-wide (set once at startup). `active_user` is per-turn —
+stored in a ContextVar so concurrent turns from different surfaces stay
+isolated.
 """
 
-_state = {"active_user": None, "owner": None}
+from __future__ import annotations
+
+from contextvars import ContextVar
+
+
+_active_user: ContextVar[str | None] = ContextVar("lumakit_active_user", default=None)
+_owner = {"value": None}
 
 
 def set_active_user(chat_id):
-    _state["active_user"] = str(chat_id) if chat_id is not None else None
+    _active_user.set(str(chat_id) if chat_id is not None else None)
 
 
 def set_owner(chat_id):
-    _state["owner"] = str(chat_id) if chat_id is not None else None
+    _owner["value"] = str(chat_id) if chat_id is not None else None
 
 
 def get_active_user():
-    return _state["active_user"]
+    return _active_user.get()
 
 
 def get_owner():
-    return _state["owner"]
+    return _owner["value"]
 
 
 def is_owner_active():
     """True if the current active user is the owner. False otherwise."""
-    owner = _state["owner"]
-    active = _state["active_user"]
+    owner = _owner["value"]
+    active = _active_user.get()
     return owner is not None and active is not None and owner == active

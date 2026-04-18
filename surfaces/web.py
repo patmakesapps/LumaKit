@@ -1,12 +1,13 @@
-"""Web UI bridge — chat with LumaKit from your browser.
+"""Web UI surface — chat with LumaKit from your browser.
 
-Run this alongside (or instead of) telegram_bridge.py:
-    python web_bridge.py
+Run with:
+    python -m surfaces.web
 
 Opens a web UI at http://localhost:7865.
 """
 
 import asyncio
+import contextvars
 import json
 import os
 import sys
@@ -31,17 +32,21 @@ from agent import Agent
 from core import auth as _auth
 from core.chat_store import (
     delete_chat,
+    get_active_chat,
     list_chats,
     load_chat,
     make_title,
     new_chat_id,
     save_chat,
+    set_active_chat,
 )
+from core import notifications as notification_log
 from core.cli import Spinner
+from core.display import DisplayHooks
 from core.interface_context import set_interface
 from core.paths import get_data_dir
-from core.reminder_checker import ReminderChecker
 from core.runtime_config import apply_user_runtime
+from core.service import LumaKitService, Surface
 from core.telegram_state import OWNER_ID
 from core import task_store, memory_store
 from tools.comms.react import set_react_context
@@ -52,7 +57,8 @@ Spinner.start = lambda self: self
 Spinner.stop = lambda self: None
 
 PORT = int(os.getenv("LUMAKIT_WEB_PORT", "7865"))
-WEB_DIR = Path(__file__).resolve().parent / "web"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+WEB_DIR = _REPO_ROOT / "web"
 WEB_USER_ID = str(OWNER_ID) if OWNER_ID else "web_owner"
 WEB_MEDIA_DIR = get_data_dir() / "web_media"
 
@@ -72,7 +78,7 @@ async def index():
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 # Serve photos (logos) from the repo
-PHOTOS_DIR = Path(__file__).resolve().parent / "photos"
+PHOTOS_DIR = _REPO_ROOT / "photos"
 if PHOTOS_DIR.exists():
     app.mount("/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
 
@@ -125,6 +131,11 @@ async def api_get_task(task_id: int):
 @app.get("/api/memories")
 async def api_list_memories():
     return memory_store.get_recent(limit=50)
+
+
+@app.get("/api/notifications")
+async def api_list_notifications():
+    return notification_log.recent(WEB_USER_ID, limit=50)
 
 
 @app.get("/api/settings")
@@ -220,41 +231,54 @@ def _unregister_web_client(user_id: str, send_fn):
             _web_clients.pop(str(user_id), None)
 
 
-def _notify_web(reminder: dict) -> bool:
-    """Deliver reminders to connected web clients in web-only setups."""
-    target = str(reminder.get("chat_id") or WEB_USER_ID)
+def _web_deliver(payload: dict) -> bool:
+    """Deliver a routed notification to connected web clients.
+
+    Reminders (label set) render as banner-style entries; everything else
+    (heartbeat, email) renders as a plain assistant message.
+    """
+    content = payload.get("content", "")
+    if not content:
+        return False
+    label = payload.get("label") or ""
+    chat_id = str(payload.get("chat_id") or WEB_USER_ID)
     with _web_clients_lock:
-        if reminder.get("chat_id") is None:
+        if payload.get("chat_id") is None and not label:
+            # Owner-targeted (heartbeat/email): prefer owner's clients.
+            callbacks = list(_web_clients.get(str(WEB_USER_ID), set()))
+            if not callbacks:
+                callbacks = [cb for clients in _web_clients.values() for cb in clients]
+        elif payload.get("chat_id") is None:
             callbacks = [cb for clients in _web_clients.values() for cb in clients]
         else:
-            callbacks = list(_web_clients.get(target, set()))
+            callbacks = list(_web_clients.get(chat_id, set()))
 
     if not callbacks:
         return False
 
-    payload = {
-        "type": "reminder",
-        "text": reminder["content"],
-        "label": "Family reminder" if reminder.get("chat_id") is None else "Reminder",
-    }
+    if label:
+        msg = {"type": "reminder", "text": content, "label": label}
+    else:
+        msg = {"type": "message", "text": content}
     for callback in callbacks:
-        callback(payload)
+        callback(msg)
     return True
+
+
+def _web_inject_session(text: str) -> None:
+    """Owner-session injection hook — not meaningful for the current web UI.
+
+    Each websocket builds its own agent session on connect, so there's no
+    persistent 'owner session' to append to. Left as a no-op for now; revisit
+    once web supports a durable owner-session model.
+    """
+    return None
 
 
 def _make_agent(ws_id: int, send_fn):
     """Create an Agent wired to push status/tool events over WebSocket."""
 
-    import agent as agent_module
-    from core import cli as cli_module
-
-    agent = Agent(
-        verbose="--verbose" in sys.argv,
-        status_callback=lambda msg: send_fn({"type": "status", "text": msg}),
-        check_interrupt=lambda: False,
-    )
-
-    # --- Patch tool call/result display ---
+    # --- Tool call/result display ---
     def ws_show_tool_call(tool_name, inputs):
         # Stash the tool context so the very next confirm() can describe what
         # is being approved (tool name, args, path). Clear any stale diff.
@@ -327,22 +351,13 @@ def _make_agent(ws_id: int, send_fn):
         # the UI looks frozen while the LLM decides what to do next.
         send_fn({"type": "status", "text": "Lumi is working..."})
 
-    cli_module.show_tool_call = ws_show_tool_call
-    cli_module.show_tool_result = ws_show_tool_result
-    agent_module.show_tool_call = ws_show_tool_call
-    agent_module.show_tool_result = ws_show_tool_result
-
-    # --- Patch render_diff to capture (not print) the diff text ---
-    def ws_render_diff(diff_text: str) -> str:
+    # --- Capture the diff onto the pending tool context instead of printing ---
+    def ws_show_diff(diff_text: str) -> None:
         ctx = _ws_tool_ctx.get(ws_id)
         if ctx is not None:
             ctx["diff"] = diff_text
-        return ""  # suppress stdout output
 
-    cli_module.render_diff = ws_render_diff
-    agent_module.render_diff = ws_render_diff
-
-    # --- Patch confirm to go through WebSocket with rich context ---
+    # --- Confirm goes through WebSocket with rich context ---
     def ws_confirm(prompt):
         """Send a confirm request over WebSocket, block until client replies."""
         ctx = _ws_tool_ctx.get(ws_id) or {}
@@ -362,8 +377,19 @@ def _make_agent(ws_id: int, send_fn):
             return _ws_confirm_results.get(ws_id, False)
         return True  # default to allow if something goes wrong
 
-    cli_module.confirm = ws_confirm
-    agent_module.confirm = ws_confirm
+    display = DisplayHooks(
+        show_tool_call=ws_show_tool_call,
+        show_tool_result=ws_show_tool_result,
+        show_diff=ws_show_diff,
+        confirm=ws_confirm,
+    )
+
+    agent = Agent(
+        verbose="--verbose" in sys.argv,
+        status_callback=lambda msg: send_fn({"type": "status", "text": msg}),
+        check_interrupt=lambda: False,
+        display=display,
+    )
 
     return agent
 
@@ -394,14 +420,50 @@ async def websocket_chat(ws: WebSocket):
     agent.check_interrupt = lambda: ws_closed["v"]
     _ws_confirm_events[ws_id] = threading.Event()
 
-    # Session state
-    session = {
-        "chat_id": new_chat_id(),
-        "title": "",
-        "first_message_sent": False,
-        "messages": agent.messages,
-    }
+    # Session state — try to resume the user's active chat (set by any
+    # surface on its last activity). Falls back to a fresh chat if the
+    # pointer is unset or the referenced chat has been deleted.
+    resumed = None
+    active_id = get_active_chat(WEB_USER_ID)
+    if active_id:
+        resumed = load_chat(active_id)
+    if resumed:
+        session = {
+            "chat_id": resumed["id"],
+            "title": resumed["title"],
+            "first_message_sent": True,
+            "messages": resumed["messages"],
+        }
+        agent.messages = resumed["messages"]
+    else:
+        session = {
+            "chat_id": new_chat_id(),
+            "title": "",
+            "first_message_sent": False,
+            "messages": agent.messages,
+        }
     _prepare_web_turn(agent, session)
+    set_active_chat(WEB_USER_ID, session["chat_id"])
+
+    if resumed:
+        await ws.send_json({
+            "type": "chat_loaded",
+            "chat_id": session["chat_id"],
+            "title": session["title"],
+            "messages": resumed["messages"],
+        })
+
+    # Replay notifications the user hasn't seen on web yet — bridges the
+    # "got pinged on Telegram while away" gap.
+    missed = notification_log.unshown_for_web(WEB_USER_ID)
+    if missed:
+        for n in missed:
+            await ws.send_json({
+                "type": "reminder",
+                "text": n["content"],
+                "label": n["label"] or "Reminder",
+            })
+        notification_log.mark_shown_on_web([n["id"] for n in missed])
 
     async def run_agent_request(text: str):
         """Run the agent in a worker thread and emit the response when it finishes.
@@ -409,13 +471,18 @@ async def websocket_chat(ws: WebSocket):
         process confirm_response / stop messages while the agent is working."""
         try:
             _prepare_web_turn(agent, session)
-            response = await loop.run_in_executor(None, agent.ask_llm, text)
+            # Snapshot the current ContextVars (auth, interface, memory user,
+            # react context) so the worker thread sees them. run_in_executor
+            # does NOT propagate contextvars by default.
+            ctx = contextvars.copy_context()
+            response = await loop.run_in_executor(None, ctx.run, agent.ask_llm, text)
             reply = response.get("message", {}).get("content", "")
             session["messages"] = agent.messages
             if not session["first_message_sent"]:
                 session["title"] = make_title(text)
                 session["first_message_sent"] = True
             save_chat(session["chat_id"], session["title"], session["messages"])
+            set_active_chat(WEB_USER_ID, session["chat_id"])
             if not ws_closed["v"]:
                 await ws.send_json({
                     "type": "response",
@@ -475,6 +542,7 @@ async def websocket_chat(ws: WebSocket):
                     agent.messages = loaded["messages"]
                     session["messages"] = agent.messages
                     _prepare_web_turn(agent, session)
+                    set_active_chat(WEB_USER_ID, session["chat_id"])
                     await ws.send_json({
                         "type": "chat_loaded",
                         "chat_id": session["chat_id"],
@@ -496,6 +564,7 @@ async def websocket_chat(ws: WebSocket):
                 agent.messages = [agent.build_system_message()]
                 session["messages"] = agent.messages
                 _prepare_web_turn(agent, session)
+                set_active_chat(WEB_USER_ID, session["chat_id"])
                 await ws.send_json({
                     "type": "chat_loaded",
                     "chat_id": session["chat_id"],
@@ -560,15 +629,24 @@ async def websocket_chat(ws: WebSocket):
 
 def main():
     _auth.set_owner(WEB_USER_ID)
-    reminders = None
+
+    # Web-only deployments run the service here; if Telegram is also configured
+    # the Telegram bridge owns the service and this one stays idle so workers
+    # don't double up.
+    service = None
     if not OWNER_ID:
-        reminders = ReminderChecker(interval=30, notify=_notify_web)
-        reminders.start()
+        service = LumaKitService()
+        service.register_surface(Surface(
+            name="web",
+            deliver=_web_deliver,
+            inject_session=_web_inject_session,
+            is_owner=True,
+        ))
+        service.start()
 
     print(f"\n=== LumaKit Web UI ===")
     print(f"Open http://localhost:{PORT} in your browser\n")
 
-    # Auto-open browser after a short delay
     def open_browser():
         import time
         time.sleep(1.5)
@@ -578,8 +656,8 @@ def main():
     try:
         uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
     finally:
-        if reminders:
-            reminders.stop()
+        if service:
+            service.stop()
 
 
 if __name__ == "__main__":
