@@ -1,6 +1,7 @@
 import os
+import re
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from core import memory_store
 from core.runtime_config import get_effective_config_for_user
@@ -20,6 +21,33 @@ def _get_active_user():
     return _active_user.get()
 
 
+def _parse_simple_relative_time(value: str, now: datetime) -> str | None:
+    match = re.fullmatch(
+        r"(?:in\s+)?(?P<amount>\d+)\s*(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)",
+        value.strip().lower(),
+    )
+    if not match:
+        return None
+
+    amount = int(match.group("amount"))
+    if amount <= 0:
+        return None
+
+    unit = match.group("unit")
+    if unit.startswith(("second", "sec")) or unit == "s":
+        delta = timedelta(seconds=amount)
+    elif unit.startswith(("minute", "min")) or unit == "m":
+        delta = timedelta(minutes=amount)
+    elif unit.startswith(("hour", "hr")) or unit == "h":
+        delta = timedelta(hours=amount)
+    elif unit.startswith("day") or unit == "d":
+        delta = timedelta(days=amount)
+    else:
+        delta = timedelta(weeks=amount)
+
+    return (now + delta).replace(microsecond=0).isoformat()
+
+
 def _parse_notify_at(value: str) -> str | None:
     """Use a focused LLM call to convert any time expression to ISO datetime.
     Returns a valid ISO string or None if parsing failed."""
@@ -35,6 +63,10 @@ def _parse_notify_at(value: str) -> str | None:
         return value if parsed > now else None
     except (ValueError, TypeError):
         pass
+
+    parsed_relative = _parse_simple_relative_time(value, now)
+    if parsed_relative:
+        return parsed_relative
 
     # Ask the LLM to convert it using the same effective runtime model the
     # active user is already using in chat.
@@ -140,7 +172,7 @@ def _remember(inputs):
 
     # Resolve scope → chat_id. 'everyone' always broadcasts (chat_id=None).
     # 'me' stores the caller's id; in CLI mode (no active user) it stays None.
-    active = _active_user["value"]
+    active = _get_active_user()
     chat_id = None if scope == "everyone" else active
     created_by = active
 
@@ -183,7 +215,7 @@ def get_recall_tool():
 def _recall(inputs):
     query = inputs.get("query", "").strip()
     limit = int(inputs.get("limit", 20))
-    active = _active_user["value"]
+    active = _get_active_user()
     if query:
         results = memory_store.search(query, limit, active_user=active)
     else:
@@ -196,7 +228,7 @@ def _check_owner(memory_id):
     memory = memory_store.get_by_id(memory_id)
     if not memory:
         return None, {"error": f"Memory {memory_id} not found"}
-    active = _active_user["value"]
+    active = _get_active_user()
     creator = memory.get("created_by")
     # CLI (no active user) and legacy rows (no creator) bypass the check.
     if active and creator and str(creator) != str(active):
