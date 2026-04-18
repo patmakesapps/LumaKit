@@ -12,6 +12,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from core.interrupts import OperationInterrupted, raise_if_interrupted
 from core.paths import get_data_dir, get_repo_root
 
 
@@ -62,6 +63,28 @@ def _available_ram() -> int | None:
     except (OSError, ValueError, IndexError):
         return None
     return None
+
+
+def _interruptible_wait(page, timeout_ms: int):
+    """Sleep in short slices so /stop can interrupt explicit waits quickly."""
+    remaining = max(0, int(timeout_ms))
+    while remaining > 0:
+        raise_if_interrupted("Browser automation interrupted by /stop.")
+        step = min(remaining, 100)
+        page.wait_for_timeout(step)
+        remaining -= step
+
+
+def _interruptible_wait_for_selector(page, selector: str, timeout_ms: int):
+    """Poll for a selector with short timeouts so /stop can interrupt quickly."""
+    deadline = time.monotonic() + (max(0, int(timeout_ms)) / 1000)
+    while True:
+        raise_if_interrupted("Browser automation interrupted by /stop.")
+        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            raise TimeoutError(f"Timeout {timeout_ms}ms exceeded while waiting for {selector}")
+        page.wait_for_selector(selector, timeout=min(remaining_ms, 250), state='visible')
+        return
 
 
 def _ensure_playwright_started():
@@ -477,6 +500,8 @@ def _browser_automation(inputs):
     page = None
 
     try:
+        raise_if_interrupted("Browser automation interrupted by /stop.")
+
         if session_id:
             session, created = _get_or_create_browser_session(
                 session_id, overall_timeout, storage_state_path=storage_state_path
@@ -501,6 +526,7 @@ def _browser_automation(inputs):
             )
 
         if url:
+            raise_if_interrupted("Browser automation interrupted by /stop.")
             page.goto(url, wait_until='domcontentloaded')
             results['page_title'] = page.title()
         else:
@@ -508,6 +534,7 @@ def _browser_automation(inputs):
             results['resumed_current_page'] = True
 
         for i, action in enumerate(actions):
+            raise_if_interrupted("Browser automation interrupted by /stop.")
             action_type = action['type']
             action_result = {'step': i + 1, 'type': action_type}
 
@@ -556,13 +583,13 @@ def _browser_automation(inputs):
 
                 elif action_type == 'wait':
                     timeout = action.get('timeout', 5000)
-                    page.wait_for_timeout(timeout)
+                    _interruptible_wait(page, timeout)
                     action_result['status'] = 'waited'
 
                 elif action_type == 'wait_for_selector':
                     selector = action['selector']
                     timeout = action.get('timeout', 10000)
-                    page.wait_for_selector(selector, timeout=timeout, state='visible')
+                    _interruptible_wait_for_selector(page, selector, timeout)
                     action_result['selector'] = selector
                     action_result['status'] = 'selector_visible'
 
@@ -600,6 +627,8 @@ def _browser_automation(inputs):
                     action_result['count'] = len(elements)
                     action_result['status'] = 'forms_inspected'
 
+            except OperationInterrupted:
+                raise
             except Exception as e:
                 action_result['status'] = 'failed'
                 action_result['error'] = str(e)
@@ -608,10 +637,12 @@ def _browser_automation(inputs):
 
             results['actions_performed'].append(action_result)
 
-        page.wait_for_timeout(1000)
+        _interruptible_wait(page, 1000)
+        raise_if_interrupted("Browser automation interrupted by /stop.")
         results['page_text_snippet'] = _page_text_snippet(page)
 
         if take_screenshot:
+            raise_if_interrupted("Browser automation interrupted by /stop.")
             final_screenshot = str(_screenshots_dir() / 'browser_automation_result.png')
             page.screenshot(path=final_screenshot, full_page=False)
             results['screenshot_path'] = final_screenshot
@@ -630,6 +661,8 @@ def _browser_automation(inputs):
                     live_session['last_used'] = time.time()
             results['session_kept_alive'] = not close_session
 
+    except OperationInterrupted:
+        raise
     except Exception as e:
         results['error'] = str(e)
     finally:

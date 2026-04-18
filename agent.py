@@ -6,8 +6,14 @@ from pathlib import Path
 
 from core.cli import DIM, Spinner, _c, confirm, render_diff, show_tool_call, show_tool_result
 from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
+from core.interrupts import interrupt_context
 from core.paths import get_data_dir, get_repo_root
-from ollama_client import OllamaClient, OllamaConnectionError, OllamaTimeoutError
+from ollama_client import (
+    OllamaClient,
+    OllamaConnectionError,
+    OllamaInterruptedError,
+    OllamaTimeoutError,
+)
 from tool_registry import ToolRegistry
 from core.summarizer import apply_summary, build_summary_request, needs_summarization
 from core.storage import StorageManager
@@ -619,6 +625,10 @@ class Agent:
                 pass
         return self.interrupt_requested
 
+    def _request_interrupt(self):
+        """Mark the current run as interrupted."""
+        self.interrupt_requested = True
+
     def _compact_tool_history(self):
         """Shrink saved tool payloads so old chats don't keep poisoning context."""
         for message in self.messages:
@@ -637,146 +647,163 @@ class Agent:
         return {"message": {"role": "assistant", "content": stop_msg}}
 
     def ask_llm(self, prompt):
-        self.messages.append({"role": "user", "content": prompt})
-        self._compact_tool_history()
-        self._trim_history()
+        with interrupt_context(self._check_interrupt, self._request_interrupt):
+            self.messages.append({"role": "user", "content": prompt})
+            self._compact_tool_history()
+            self._trim_history()
 
-        # Clear any stale interrupt from a previous run
-        self.interrupt_requested = False
+            # Clear any stale interrupt from a previous run
+            self.interrupt_requested = False
 
-        tools = self.get_tools_for_llm()
-        start_time = time.monotonic()
-        last_tool_key = None
+            tools = self.get_tools_for_llm()
+            start_time = time.monotonic()
+            last_tool_key = None
 
-        for round_num in range(self.MAX_TOOL_ROUNDS + 1):
-            # User-requested stop
-            if self._check_interrupt():
-                return self._interrupt_response()
-
-            # Wall-clock guard
-            elapsed = time.monotonic() - start_time
-            if elapsed >= self.ASK_LLM_TIMEOUT:
-                self.messages.append(
-                    {"role": "assistant", "content": "I ran out of time working on that. Please try again or break the task into smaller steps."}
-                )
-                return {"message": {"role": "assistant", "content": "I ran out of time working on that. Please try again or break the task into smaller steps."}}
-
-            spinner_msg = "Lumi is thinking" if round_num == 0 else "Lumi is working"
-            spinner = Spinner(spinner_msg).start()
-            try:
-                remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
-                deadline = min(self.ROUND_DEADLINE, remaining)
-                response = self.ollama.chat(
-                    model=self.model, messages=self.messages, tools=tools,
-                    stream=False, deadline=deadline,
-                )
-            except OllamaConnectionError as e:
-                spinner.stop()
-                msg = str(e)
-                if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
-                    msg = f"Primary model unavailable, using fallback ({self.ollama.last_model_used}). " + msg
-                self.messages.append({"role": "assistant", "content": msg})
-                return {"message": {"role": "assistant", "content": msg}}
-            except OllamaTimeoutError:
-                spinner.stop()
-                msg = "Ollama stopped responding. Please check that the model is running and try again."
-                self.messages.append({"role": "assistant", "content": msg})
-                return {"message": {"role": "assistant", "content": msg}}
-            finally:
-                spinner.stop()
-
-            # Notify if fallback model was used
-            if (self.ollama.last_model_used
-                    and self.ollama.last_model_used != self.model
-                    and round_num == 0):
-                print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
-
-            message = response.get("message", {})
-            tool_calls = message.get("tool_calls", [])
-
-            if self.verbose:
-                label = f"round {round_num}" if tool_calls else "final"
-                print(f"  [{label}] {json.dumps(message, default=str)[:300]}")
-
-            self.messages.append(message)
-
-            # Surface any text the model included alongside tool calls
-            mid_text = (message.get("content") or "").strip()
-            if mid_text and tool_calls and self.status_callback:
-                self.status_callback(mid_text)
-
-            if not tool_calls:
-                # Empty response fix: if the model returned no text after
-                # working with tools, ask it to summarize what it did
-                if not mid_text and round_num > 0:
-                    self.messages.append({
-                        "role": "user",
-                        "content": "Summarize what you just did.",
-                    })
-                    try:
-                        spinner = Spinner("Lumi is finishing up").start()
-                        remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
-                        followup = self.ollama.chat(
-                            model=self.model, messages=self.messages,
-                            stream=False, deadline=min(self.ROUND_DEADLINE, remaining),
-                        )
-                        spinner.stop()
-                        followup_msg = followup.get("message", {})
-                        self.messages.append(followup_msg)
-                        return followup
-                    except Exception:
-                        spinner.stop()
-                return response
-
-            for tool_call in tool_calls:
-                # Check for stop before every tool call so long sequences
-                # (like a multi-step browser automation) can be aborted mid-flight.
+            for round_num in range(self.MAX_TOOL_ROUNDS + 1):
+                # User-requested stop
                 if self._check_interrupt():
                     return self._interrupt_response()
 
-                function_data = tool_call.get("function", {})
-                tool_name = function_data.get("name")
-                tool_inputs = function_data.get("arguments", {})
+                # Wall-clock guard
+                elapsed = time.monotonic() - start_time
+                if elapsed >= self.ASK_LLM_TIMEOUT:
+                    self.messages.append(
+                        {"role": "assistant", "content": "I ran out of time working on that. Please try again or break the task into smaller steps."}
+                    )
+                    return {"message": {"role": "assistant", "content": "I ran out of time working on that. Please try again or break the task into smaller steps."}}
 
-                # Loop detection: same tool + same args as last call
-                tool_key = (tool_name, json.dumps(tool_inputs, sort_keys=True))
-                if tool_key == last_tool_key:
-                    stuck_msg = f"It looks like I'm stuck repeating the same action ({tool_name}). Let me stop here — could you rephrase or try a different approach?"
-                    self.messages.append({"role": "assistant", "content": stuck_msg})
-                    return {"message": {"role": "assistant", "content": stuck_msg}}
-                last_tool_key = tool_key
+                spinner_msg = "Lumi is thinking" if round_num == 0 else "Lumi is working"
+                spinner = Spinner(spinner_msg).start()
+                try:
+                    remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
+                    deadline = min(self.ROUND_DEADLINE, remaining)
+                    response = self.ollama.chat(
+                        model=self.model,
+                        messages=self.messages,
+                        tools=tools,
+                        stream=False,
+                        deadline=deadline,
+                        check_interrupt=self._check_interrupt,
+                    )
+                except OllamaInterruptedError:
+                    spinner.stop()
+                    return self._interrupt_response()
+                except OllamaConnectionError as e:
+                    spinner.stop()
+                    msg = str(e)
+                    if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
+                        msg = f"Primary model unavailable, using fallback ({self.ollama.last_model_used}). " + msg
+                    self.messages.append({"role": "assistant", "content": msg})
+                    return {"message": {"role": "assistant", "content": msg}}
+                except OllamaTimeoutError:
+                    spinner.stop()
+                    msg = "Ollama stopped responding. Please check that the model is running and try again."
+                    self.messages.append({"role": "assistant", "content": msg})
+                    return {"message": {"role": "assistant", "content": msg}}
+                finally:
+                    spinner.stop()
 
-                show_tool_call(tool_name, tool_inputs)
+                # Notify if fallback model was used
+                if (self.ollama.last_model_used
+                        and self.ollama.last_model_used != self.model
+                        and round_num == 0):
+                    print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
 
-                if tool_name in DIFF_TOOLS:
-                    tool_result = self._handle_diff_tool(tool_name, tool_inputs)
-                elif tool_name in PREVIEW_TOOLS:
-                    tool_result = self._handle_preview_tool(tool_name, tool_inputs)
-                elif tool_name in CONFIRM_TOOLS:
-                    tool_result = self._handle_confirm_tool(tool_name, tool_inputs)
-                else:
-                    tool_result = self.execute_tool(tool_name, tool_inputs)
-
-                show_tool_result(tool_result)
-
-                # Incrementally update code index when files change
-                if tool_name in ("edit_file", "write_file", "delete_file"):
-                    changed_path = tool_inputs.get("path")
-                    if changed_path and tool_result.get("success"):
-                        self.code_index.update_file(changed_path)
+                message = response.get("message", {})
+                tool_calls = message.get("tool_calls", [])
 
                 if self.verbose:
-                    print(f"  [tool result] {json.dumps(tool_result)[:200]}")
+                    label = f"round {round_num}" if tool_calls else "final"
+                    print(f"  [{label}] {json.dumps(message, default=str)[:300]}")
 
-                self.messages.append(
-                    {
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": compact_tool_result_for_history(tool_name, tool_result),
-                    }
-                )
+                self.messages.append(message)
 
-        return response
+                # Surface any text the model included alongside tool calls
+                mid_text = (message.get("content") or "").strip()
+                if mid_text and tool_calls and self.status_callback:
+                    self.status_callback(mid_text)
+
+                if not tool_calls:
+                    # Empty response fix: if the model returned no text after
+                    # working with tools, ask it to summarize what it did
+                    if not mid_text and round_num > 0:
+                        self.messages.append({
+                            "role": "user",
+                            "content": "Summarize what you just did.",
+                        })
+                        try:
+                            spinner = Spinner("Lumi is finishing up").start()
+                            remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
+                            followup = self.ollama.chat(
+                                model=self.model,
+                                messages=self.messages,
+                                stream=False,
+                                deadline=min(self.ROUND_DEADLINE, remaining),
+                                check_interrupt=self._check_interrupt,
+                            )
+                            spinner.stop()
+                            followup_msg = followup.get("message", {})
+                            self.messages.append(followup_msg)
+                            return followup
+                        except OllamaInterruptedError:
+                            spinner.stop()
+                            return self._interrupt_response()
+                        except Exception:
+                            spinner.stop()
+                    return response
+
+                for tool_call in tool_calls:
+                    # Check for stop before every tool call so long sequences
+                    # (like a multi-step browser automation) can be aborted mid-flight.
+                    if self._check_interrupt():
+                        return self._interrupt_response()
+
+                    function_data = tool_call.get("function", {})
+                    tool_name = function_data.get("name")
+                    tool_inputs = function_data.get("arguments", {})
+
+                    # Loop detection: same tool + same args as last call
+                    tool_key = (tool_name, json.dumps(tool_inputs, sort_keys=True))
+                    if tool_key == last_tool_key:
+                        stuck_msg = f"It looks like I'm stuck repeating the same action ({tool_name}). Let me stop here — could you rephrase or try a different approach?"
+                        self.messages.append({"role": "assistant", "content": stuck_msg})
+                        return {"message": {"role": "assistant", "content": stuck_msg}}
+                    last_tool_key = tool_key
+
+                    show_tool_call(tool_name, tool_inputs)
+
+                    if tool_name in DIFF_TOOLS:
+                        tool_result = self._handle_diff_tool(tool_name, tool_inputs)
+                    elif tool_name in PREVIEW_TOOLS:
+                        tool_result = self._handle_preview_tool(tool_name, tool_inputs)
+                    elif tool_name in CONFIRM_TOOLS:
+                        tool_result = self._handle_confirm_tool(tool_name, tool_inputs)
+                    else:
+                        tool_result = self.execute_tool(tool_name, tool_inputs)
+
+                    if tool_result.get("interrupted") or self._check_interrupt():
+                        return self._interrupt_response()
+
+                    show_tool_result(tool_result)
+
+                    # Incrementally update code index when files change
+                    if tool_name in ("edit_file", "write_file", "delete_file"):
+                        changed_path = tool_inputs.get("path")
+                        if changed_path and tool_result.get("success"):
+                            self.code_index.update_file(changed_path)
+
+                    if self.verbose:
+                        print(f"  [tool result] {json.dumps(tool_result)[:200]}")
+
+                    self.messages.append(
+                        {
+                            "role": "tool",
+                            "name": tool_name,
+                            "content": compact_tool_result_for_history(tool_name, tool_result),
+                        }
+                    )
+
+            return response
 
     SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
@@ -788,72 +815,82 @@ class Agent:
             image_data: Raw image bytes (e.g. from Telegram download).
             image_path: Path to an image file on disk.
         """
-        if image_path:
-            path = Path(image_path)
-            if not path.exists():
+        with interrupt_context(self._check_interrupt, self._request_interrupt):
+            if image_path:
+                path = Path(image_path)
+                if not path.exists():
+                    return {"message": {"role": "assistant",
+                                        "content": f"File not found: {image_path}"}}
+                if path.suffix.lower() not in self.SUPPORTED_IMAGE_EXTS:
+                    return {"message": {"role": "assistant",
+                                        "content": f"Unsupported image format: {path.suffix}\n"
+                                                    f"Supported: {', '.join(sorted(self.SUPPORTED_IMAGE_EXTS))}"}}
+                image_data = path.read_bytes()
+
+            if not image_data:
                 return {"message": {"role": "assistant",
-                                    "content": f"File not found: {image_path}"}}
-            if path.suffix.lower() not in self.SUPPORTED_IMAGE_EXTS:
-                return {"message": {"role": "assistant",
-                                    "content": f"Unsupported image format: {path.suffix}\n"
-                                                f"Supported: {', '.join(sorted(self.SUPPORTED_IMAGE_EXTS))}"}}
-            image_data = path.read_bytes()
+                                    "content": "No image provided."}}
 
-        if not image_data:
-            return {"message": {"role": "assistant",
-                                "content": "No image provided."}}
+            b64 = base64.b64encode(image_data).decode("utf-8")
+            prompt = prompt or "What do you see in this image?"
 
-        b64 = base64.b64encode(image_data).decode("utf-8")
-        prompt = prompt or "What do you see in this image?"
+            # Clear any stale interrupt from a previous run
+            self.interrupt_requested = False
 
-        # Ollama vision format: message with "images" field
-        self.messages.append({
-            "role": "user",
-            "content": prompt,
-            "images": [b64],
-        })
-        self._compact_tool_history()
-        self._trim_history()
+            # Ollama vision format: message with "images" field
+            self.messages.append({
+                "role": "user",
+                "content": prompt,
+                "images": [b64],
+            })
+            self._compact_tool_history()
+            self._trim_history()
 
-        spinner = Spinner("Lumi is looking at the image").start()
-        try:
-            remaining = self.ASK_LLM_TIMEOUT
-            deadline = min(self.ROUND_DEADLINE, remaining)
-            response = self.ollama.chat(
-                model=self.model, messages=self.messages,
-                stream=False, deadline=deadline,
-            )
-        except OllamaConnectionError as e:
-            spinner.stop()
-            msg = str(e)
-            self.messages.append({"role": "assistant", "content": msg})
-            return {"message": {"role": "assistant", "content": msg}}
-        except OllamaTimeoutError:
-            spinner.stop()
-            msg = "Ollama stopped responding while processing the image."
-            self.messages.append({"role": "assistant", "content": msg})
-            return {"message": {"role": "assistant", "content": msg}}
-        except Exception as e:
-            spinner.stop()
-            error_str = str(e)
-            # Detect vision-not-supported errors from Ollama
-            if "does not support" in error_str.lower() or "vision" in error_str.lower():
-                msg = (f"The current model ({self.model}) doesn't support image analysis. "
-                       f"Try switching to a vision model like llava or moondream.")
-            else:
-                msg = f"Error processing image: {error_str}"
-            self.messages.append({"role": "assistant", "content": msg})
-            return {"message": {"role": "assistant", "content": msg}}
-        finally:
-            spinner.stop()
+            spinner = Spinner("Lumi is looking at the image").start()
+            try:
+                remaining = self.ASK_LLM_TIMEOUT
+                deadline = min(self.ROUND_DEADLINE, remaining)
+                response = self.ollama.chat(
+                    model=self.model,
+                    messages=self.messages,
+                    stream=False,
+                    deadline=deadline,
+                    check_interrupt=self._check_interrupt,
+                )
+            except OllamaInterruptedError:
+                spinner.stop()
+                return self._interrupt_response()
+            except OllamaConnectionError as e:
+                spinner.stop()
+                msg = str(e)
+                self.messages.append({"role": "assistant", "content": msg})
+                return {"message": {"role": "assistant", "content": msg}}
+            except OllamaTimeoutError:
+                spinner.stop()
+                msg = "Ollama stopped responding while processing the image."
+                self.messages.append({"role": "assistant", "content": msg})
+                return {"message": {"role": "assistant", "content": msg}}
+            except Exception as e:
+                spinner.stop()
+                error_str = str(e)
+                # Detect vision-not-supported errors from Ollama
+                if "does not support" in error_str.lower() or "vision" in error_str.lower():
+                    msg = (f"The current model ({self.model}) doesn't support image analysis. "
+                           f"Try switching to a vision model like llava or moondream.")
+                else:
+                    msg = f"Error processing image: {error_str}"
+                self.messages.append({"role": "assistant", "content": msg})
+                return {"message": {"role": "assistant", "content": msg}}
+            finally:
+                spinner.stop()
 
-        # Notify if fallback was used
-        if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
-            print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
+            # Notify if fallback was used
+            if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
+                print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
 
-        message = response.get("message", {})
-        self.messages.append(message)
-        return response
+            message = response.get("message", {})
+            self.messages.append(message)
+            return response
 
     def run_task(self, task_description):
         print(f"\n=== Task: {task_description} ===")

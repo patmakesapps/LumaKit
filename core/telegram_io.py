@@ -10,6 +10,7 @@ import re
 import socket
 import urllib.error
 
+from core.interrupts import request_interrupt
 from core.telegram_api import send_audio, send_message as telegram_send_message, telegram_api
 from core.telegram_state import (
     _active_chat_id,
@@ -119,7 +120,7 @@ def check_for_stop():
         if text.lower() == "/stop" and msg_chat_id == str(chat_id):
             found_stop = True
             try:
-                send_message("Stopped.", chat_id=msg_chat_id)
+                send_message("Stopping...", chat_id=msg_chat_id)
             except Exception:
                 pass
         else:
@@ -144,6 +145,10 @@ def telegram_confirm(prompt):
                 if str(msg.get("chat", {}).get("id")) != chat_id:
                     continue
                 text = msg.get("text", "").strip().lower()
+                if text == "/stop":
+                    request_interrupt()
+                    send_message("Stopping...", chat_id=chat_id)
+                    return False
                 if text in ("y", "yes", "n", "no"):
                     return text in ("y", "yes")
         except (socket.timeout, urllib.error.URLError):

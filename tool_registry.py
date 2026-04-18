@@ -4,6 +4,7 @@ import importlib
 from pathlib import Path
 
 from dotenv import load_dotenv
+from core.interrupts import OperationInterrupted
 
 # Load config.env from ~/.lumakit/ first (user overrides), then repo-root .env
 _user_env = Path.home() / ".lumakit" / "config.env"
@@ -48,6 +49,13 @@ class ToolRegistry:
             self.validate_inputs(inputs, tool['inputSchema'])
             result = tool['execute'](inputs)
             return {'success': True, 'data': result}
+        except OperationInterrupted as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'toolName': name,
+                'interrupted': True,
+            }
         except Exception as e:
             return {'success': False, 'error': str(e), 'toolName': name}    
 
@@ -77,6 +85,5 @@ class ToolRegistry:
                     tool_func = getattr(module, attr_name)
                     tool = tool_func()
                     self.register(tool)
-
 
 

@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 
 from core import memory_store
+from core.runtime_config import get_effective_config_for_user
 from ollama_client import OllamaClient
 
 
@@ -24,33 +25,55 @@ def _parse_notify_at(value: str) -> str | None:
     if not value or not value.strip():
         return None
 
+    value = value.strip()
+    now = datetime.now()
+
     # Already valid ISO — skip the LLM call
     try:
-        datetime.fromisoformat(value)
-        return value
+        parsed = datetime.fromisoformat(value)
+        return value if parsed > now else None
     except (ValueError, TypeError):
         pass
 
-    # Ask the LLM to convert it
-    now = datetime.now().isoformat()
+    # Ask the LLM to convert it using the same effective runtime model the
+    # active user is already using in chat.
+    now_iso = now.replace(microsecond=0).isoformat()
+    timezone_name = datetime.now().astimezone().tzname() or "local time"
+    active_user = _get_active_user()
+    model_cfg = get_effective_config_for_user(active_user)
     prompt = (
-        f"The current date and time is: {now}\n"
-        f"Convert this to an ISO 8601 datetime string: \"{value}\"\n"
-        "Respond with ONLY the datetime string, nothing else. Example: 2026-04-08T14:30:00"
+        "Convert the reminder time below into a local ISO 8601 datetime.\n"
+        f"Current local date and time: {now_iso}\n"
+        f"Local timezone: {timezone_name}\n"
+        f"Reminder expression: \"{value}\"\n\n"
+        "Rules:\n"
+        "- Respond with ONLY one datetime in this exact format: YYYY-MM-DDTHH:MM:SS\n"
+        "- Always interpret the reminder as a FUTURE local time.\n"
+        "- If the user gives only a time and that time has already passed today, use tomorrow.\n"
+        "- If the user gives a weekday, choose the next future occurrence of that weekday.\n"
+        "- If you cannot determine a valid future time, respond with INVALID.\n"
+        "Examples:\n"
+        "- \"in 5 minutes\" -> 2026-04-17T15:25:00\n"
+        "- \"tomorrow at 9am\" -> 2026-04-18T09:00:00\n"
+        "- \"Friday at 2\" -> 2026-04-24T14:00:00"
     )
 
     try:
-        client = OllamaClient()
-        model = os.getenv("OLLAMA_MODEL")
+        client = OllamaClient(fallback_model=model_cfg.get("fallback_model"))
+        model = model_cfg.get("primary_model") or os.getenv("OLLAMA_MODEL")
         response = client.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             stream=False,
         )
         result = response.get("message", {}).get("content", "").strip()
+        if result == "INVALID":
+            return None
 
         # Validate that the LLM actually returned a valid datetime
-        datetime.fromisoformat(result)
+        parsed = datetime.fromisoformat(result)
+        if parsed <= now:
+            return None
         return result
     except (ValueError, TypeError, Exception):
         return None

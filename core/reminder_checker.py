@@ -11,7 +11,11 @@ def _default_notify(reminder: dict) -> None:
 
 
 class ReminderChecker:
-    """Background thread that checks for due reminders every interval."""
+    """Background thread that checks for due reminders every interval.
+
+    The notify callback may return False to leave the reminder pending so it
+    can be retried on a later pass.
+    """
 
     def __init__(self, interval: int = 60, notify=None):
         self._interval = interval
@@ -24,8 +28,9 @@ class ReminderChecker:
             try:
                 due = memory_store.get_due_reminders()
                 for reminder in due:
-                    self._notify(reminder)
-                    memory_store.delete(reminder["id"])
+                    delivered = self._notify(reminder)
+                    if delivered is not False:
+                        memory_store.delete(reminder["id"])
             except Exception:
                 pass  # don't crash the background thread
             self._stop.wait(self._interval)

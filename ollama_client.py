@@ -1,3 +1,5 @@
+import threading
+
 import requests
 
 
@@ -7,6 +9,10 @@ class OllamaTimeoutError(Exception):
 
 class OllamaConnectionError(Exception):
     """Raised when Ollama server is unreachable after all retries."""
+
+
+class OllamaInterruptedError(Exception):
+    """Raised when the user interrupts an in-flight Ollama request."""
 
 
 class OllamaClient:
@@ -38,8 +44,7 @@ class OllamaClient:
             result = self._post(
                 model, messages, tools, stream, options, request_timeout=timeout
             )
-            self.last_model_used = model
-            return result
+            return result, model
         except requests.Timeout as e:
             if not self.fallback_model or self.fallback_model == model:
                 raise OllamaTimeoutError(
@@ -50,8 +55,7 @@ class OllamaClient:
                     self.fallback_model, messages, tools, stream, options,
                     request_timeout=timeout,
                 )
-                self.last_model_used = self.fallback_model
-                return result
+                return result, self.fallback_model
             except requests.Timeout as fallback_error:
                 raise OllamaTimeoutError(
                     f"Ollama did not respond within {timeout}s for either "
@@ -75,8 +79,7 @@ class OllamaClient:
                     self.fallback_model, messages, tools, stream, options,
                     request_timeout=timeout,
                 )
-                self.last_model_used = self.fallback_model
-                return result
+                return result, self.fallback_model
             except requests.Timeout as fallback_error:
                 raise OllamaTimeoutError(
                     f"Ollama did not respond within {timeout}s for fallback "
@@ -88,11 +91,49 @@ class OllamaClient:
                     f"Both primary ({model}) and fallback ({self.fallback_model}) failed."
                 ) from e
 
-    def chat(self, model, messages, tools=None, stream=False, deadline=None, options=None):
+    def chat(self, model, messages, tools=None, stream=False, deadline=None, options=None,
+             check_interrupt=None):
         """Send a chat request. If *deadline* (seconds) is set, raise
         OllamaTimeoutError when the call takes longer than that."""
         self.last_model_used = None
         timeout = self.request_timeout if deadline is None else max(1, float(deadline))
-        return self._post_with_fallback(
-            model, messages, tools, stream, options, request_timeout=timeout
-        )
+        if not check_interrupt:
+            result, used_model = self._post_with_fallback(
+                model, messages, tools, stream, options, request_timeout=timeout
+            )
+            self.last_model_used = used_model
+            return result
+
+        outcome = {}
+        done = threading.Event()
+
+        def _run_request():
+            try:
+                result, used_model = self._post_with_fallback(
+                    model, messages, tools, stream, options,
+                    request_timeout=timeout,
+                )
+                outcome["result"] = result
+                outcome["used_model"] = used_model
+            except Exception as exc:
+                outcome["error"] = exc
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=_run_request, daemon=True)
+        thread.start()
+
+        while not done.wait(0.1):
+            try:
+                if check_interrupt():
+                    raise OllamaInterruptedError("Interrupted by /stop.")
+            except OllamaInterruptedError:
+                raise
+            except Exception:
+                continue
+
+        if "error" in outcome:
+            raise outcome["error"]
+
+        self.last_model_used = outcome.get("used_model")
+        return outcome["result"]

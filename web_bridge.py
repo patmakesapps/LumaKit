@@ -40,6 +40,7 @@ from core.chat_store import (
 from core.cli import Spinner
 from core.interface_context import set_interface
 from core.paths import get_data_dir
+from core.reminder_checker import ReminderChecker
 from core.runtime_config import apply_user_runtime
 from core.telegram_state import OWNER_ID
 from core import task_store, memory_store
@@ -146,6 +147,8 @@ _ws_confirm_results: dict[int, bool] = {}
 # tool_name + args from show_tool_call and the diff from render_diff so they
 # can be attached to the next confirm event).
 _ws_tool_ctx: dict[int, dict] = {}
+_web_clients_lock = threading.RLock()
+_web_clients: dict[str, set] = {}
 
 
 def _tool_detail(tool_name: str, inputs: dict) -> str:
@@ -200,6 +203,43 @@ def _prepare_web_turn(agent: Agent, session: dict):
     set_interface("web", WEB_USER_ID)
     session["messages"] = agent.messages
     apply_user_runtime(agent, session, WEB_USER_ID, surface="web")
+
+
+def _register_web_client(user_id: str, send_fn):
+    with _web_clients_lock:
+        _web_clients.setdefault(str(user_id), set()).add(send_fn)
+
+
+def _unregister_web_client(user_id: str, send_fn):
+    with _web_clients_lock:
+        clients = _web_clients.get(str(user_id))
+        if not clients:
+            return
+        clients.discard(send_fn)
+        if not clients:
+            _web_clients.pop(str(user_id), None)
+
+
+def _notify_web(reminder: dict) -> bool:
+    """Deliver reminders to connected web clients in web-only setups."""
+    target = str(reminder.get("chat_id") or WEB_USER_ID)
+    with _web_clients_lock:
+        if reminder.get("chat_id") is None:
+            callbacks = [cb for clients in _web_clients.values() for cb in clients]
+        else:
+            callbacks = list(_web_clients.get(target, set()))
+
+    if not callbacks:
+        return False
+
+    payload = {
+        "type": "reminder",
+        "text": reminder["content"],
+        "label": "Family reminder" if reminder.get("chat_id") is None else "Reminder",
+    }
+    for callback in callbacks:
+        callback(payload)
+    return True
 
 
 def _make_agent(ws_id: int, send_fn):
@@ -347,6 +387,7 @@ async def websocket_chat(ws: WebSocket):
             pass
 
     _auth.set_active_user(WEB_USER_ID)
+    _register_web_client(WEB_USER_ID, send_sync)
 
     agent = _make_agent(ws_id, send_sync)
     # If the client disconnects, abort the agent loop at the next check
@@ -413,6 +454,11 @@ async def websocket_chat(ws: WebSocket):
             # Explicit stop button (legacy — UI now uses /stop instead)
             if msg_type == "stop":
                 agent.interrupt_requested = True
+                ev = _ws_confirm_events.get(ws_id)
+                if ev and not ev.is_set():
+                    _ws_confirm_results[ws_id] = False
+                    ev.set()
+                await ws.send_json({"type": "status", "text": "Stopping..."})
                 continue
 
             # Load a specific chat
@@ -494,6 +540,7 @@ async def websocket_chat(ws: WebSocket):
         pass
     finally:
         ws_closed["v"] = True
+        _unregister_web_client(WEB_USER_ID, send_sync)
         # Cancel any in-flight agent task
         if agent_task and not agent_task.done():
             agent.interrupt_requested = True
@@ -513,6 +560,10 @@ async def websocket_chat(ws: WebSocket):
 
 def main():
     _auth.set_owner(WEB_USER_ID)
+    reminders = None
+    if not OWNER_ID:
+        reminders = ReminderChecker(interval=30, notify=_notify_web)
+        reminders.start()
 
     print(f"\n=== LumaKit Web UI ===")
     print(f"Open http://localhost:{PORT} in your browser\n")
@@ -524,8 +575,11 @@ def main():
         webbrowser.open(f"http://localhost:{PORT}")
 
     threading.Thread(target=open_browser, daemon=True).start()
-
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
+    finally:
+        if reminders:
+            reminders.stop()
 
 
 if __name__ == "__main__":

@@ -402,6 +402,11 @@ const ws = new WS({
         currentTurnHadRichReply = true;
     },
 
+    reminder(data) {
+        const label = data.label || 'Reminder';
+        addMessage('assistant', `🔔 ${label}: ${data.text}`);
+    },
+
     error(data) {
         setWorking(false);
         removeStatus();
