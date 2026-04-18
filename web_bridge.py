@@ -129,8 +129,31 @@ async def api_get_settings():
 # ---------------------------------------------------------------------------
 
 # Per-connection state for the confirm/deny flow
-_ws_confirm_events: dict[int, asyncio.Event] = {}
+_ws_confirm_events: dict[int, threading.Event] = {}
 _ws_confirm_results: dict[int, bool] = {}
+# Per-connection scratchpad for the tool currently being announced (captures
+# tool_name + args from show_tool_call and the diff from render_diff so they
+# can be attached to the next confirm event).
+_ws_tool_ctx: dict[int, dict] = {}
+
+
+def _tool_detail(tool_name: str, inputs: dict) -> str:
+    """Human-readable one-liner for a tool invocation."""
+    if tool_name in ("edit_file", "write_file", "read_file", "delete_file"):
+        return inputs.get("path", "")
+    if tool_name == "execute_shell":
+        return (inputs.get("command") or "")[:160]
+    if tool_name == "execute_python":
+        return (inputs.get("code") or "")[:160]
+    if tool_name == "move_path":
+        src = inputs.get("source_path", "?")
+        dst = inputs.get("destination_path", "?")
+        return f"{src} \u2192 {dst}"
+    if "path" in inputs:
+        return inputs["path"]
+    if "query" in inputs:
+        return inputs["query"][:160]
+    return ""
 
 
 def _make_agent(ws_id: int, send_fn):
@@ -145,41 +168,27 @@ def _make_agent(ws_id: int, send_fn):
         check_interrupt=lambda: False,
     )
 
-    # --- Patch confirm to go through WebSocket ---
-    original_confirm = cli_module.confirm
-
-    def ws_confirm(prompt):
-        """Send a confirm request over WebSocket, block until client replies."""
-        send_fn({"type": "confirm", "prompt": prompt})
-        # Wait for the client's response (set by the WebSocket handler)
-        event = _ws_confirm_events.get(ws_id)
-        if event:
-            event.wait(timeout=120)  # 2 min timeout
-            event.clear()
-            return _ws_confirm_results.get(ws_id, False)
-        return True  # default to allow if something goes wrong
-
-    cli_module.confirm = ws_confirm
-    agent_module.confirm = ws_confirm
-
     # --- Patch tool call/result display ---
     def ws_show_tool_call(tool_name, inputs):
-        detail = ""
-        if "path" in inputs:
-            detail = f" {inputs['path']}"
-        elif "command" in inputs:
-            detail = f" {inputs['command'][:80]}"
+        # Stash the tool context so the very next confirm() can describe what
+        # is being approved (tool name, args, path). Clear any stale diff.
+        _ws_tool_ctx[ws_id] = {
+            "tool_name": tool_name,
+            "args": {k: str(v)[:400] for k, v in inputs.items()},
+            "detail": _tool_detail(tool_name, inputs),
+            "path": inputs.get("path") or inputs.get("source_path"),
+            "diff": None,
+        }
         send_fn({
             "type": "tool_call",
             "name": tool_name,
-            "detail": detail,
-            "args": {k: str(v)[:200] for k, v in inputs.items()},
+            "detail": _ws_tool_ctx[ws_id]["detail"],
         })
 
     def ws_show_tool_result(result):
-        summary = ""
         if not result.get("success"):
             summary = result.get("error", "unknown error")
+            is_error = True
         else:
             data = result.get("data", {})
             if data.get("skipped"):
@@ -188,12 +197,55 @@ def _make_agent(ws_id: int, send_fn):
                 summary = f"found {data['count']} result(s)"
             else:
                 summary = "done"
-        send_fn({"type": "tool_result", "name": "", "summary": summary})
+            is_error = False
+        send_fn({
+            "type": "tool_result",
+            "name": "",
+            "summary": summary,
+            "error": is_error,
+        })
+        _ws_tool_ctx.pop(ws_id, None)
+        # The monkey-patched Spinner is silent, so without an explicit status
+        # the UI looks frozen while the LLM decides what to do next.
+        send_fn({"type": "status", "text": "Lumi is working..."})
 
     cli_module.show_tool_call = ws_show_tool_call
     cli_module.show_tool_result = ws_show_tool_result
     agent_module.show_tool_call = ws_show_tool_call
     agent_module.show_tool_result = ws_show_tool_result
+
+    # --- Patch render_diff to capture (not print) the diff text ---
+    def ws_render_diff(diff_text: str) -> str:
+        ctx = _ws_tool_ctx.get(ws_id)
+        if ctx is not None:
+            ctx["diff"] = diff_text
+        return ""  # suppress stdout output
+
+    cli_module.render_diff = ws_render_diff
+    agent_module.render_diff = ws_render_diff
+
+    # --- Patch confirm to go through WebSocket with rich context ---
+    def ws_confirm(prompt):
+        """Send a confirm request over WebSocket, block until client replies."""
+        ctx = _ws_tool_ctx.get(ws_id) or {}
+        send_fn({
+            "type": "confirm",
+            "prompt": prompt,
+            "tool_name": ctx.get("tool_name"),
+            "args": ctx.get("args") or {},
+            "detail": ctx.get("detail") or "",
+            "path": ctx.get("path"),
+            "diff": ctx.get("diff"),
+        })
+        event = _ws_confirm_events.get(ws_id)
+        if event:
+            event.wait(timeout=300)
+            event.clear()
+            return _ws_confirm_results.get(ws_id, False)
+        return True  # default to allow if something goes wrong
+
+    cli_module.confirm = ws_confirm
+    agent_module.confirm = ws_confirm
 
     return agent
 
@@ -203,12 +255,22 @@ async def websocket_chat(ws: WebSocket):
     await ws.accept()
     ws_id = id(ws)
     loop = asyncio.get_event_loop()
+    ws_closed = {"v": False}
 
-    # Thread-safe send helper: schedule the coroutine on the event loop
+    # Thread-safe send helper: schedule the coroutine on the event loop.
+    # Swallows errors when the socket is already closed so a background agent
+    # thread doesn't spam the server log after the user reloads.
     def send_sync(msg: dict):
-        asyncio.run_coroutine_threadsafe(ws.send_json(msg), loop)
+        if ws_closed["v"]:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(ws.send_json(msg), loop)
+        except Exception:
+            pass
 
     agent = _make_agent(ws_id, send_sync)
+    # If the client disconnects, abort the agent loop at the next check
+    agent.check_interrupt = lambda: ws_closed["v"]
     _ws_confirm_events[ws_id] = threading.Event()
 
     # Session state
@@ -295,23 +357,35 @@ async def websocket_chat(ws: WebSocket):
 
                     save_chat(chat_id, title, agent.messages)
 
-                    await ws.send_json({
-                        "type": "response",
-                        "text": reply,
-                        "chat_id": chat_id,
-                        "title": title,
-                    })
+                    if not ws_closed["v"]:
+                        await ws.send_json({
+                            "type": "response",
+                            "text": reply,
+                            "chat_id": chat_id,
+                            "title": title,
+                        })
                 except Exception as e:
-                    await ws.send_json({
-                        "type": "error",
-                        "text": f"Error: {e}",
-                    })
+                    if not ws_closed["v"]:
+                        try:
+                            await ws.send_json({
+                                "type": "error",
+                                "text": f"Error: {e}",
+                            })
+                        except Exception:
+                            pass
 
     except WebSocketDisconnect:
         pass
     finally:
+        ws_closed["v"] = True
+        # If the agent is blocked on a confirm, unblock it so the thread can exit
+        ev = _ws_confirm_events.get(ws_id)
+        if ev:
+            _ws_confirm_results[ws_id] = False
+            ev.set()
         _ws_confirm_events.pop(ws_id, None)
         _ws_confirm_results.pop(ws_id, None)
+        _ws_tool_ctx.pop(ws_id, None)
 
 
 # ---------------------------------------------------------------------------

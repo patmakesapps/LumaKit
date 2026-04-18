@@ -36,7 +36,6 @@ Credentials (username, email, password) live in `lumi/identity.txt` — gitignor
 
 ### Direct Messages
 - DM inbox: `https://www.instagram.com/direct/inbox/`
-- Clicking on DM threads in the inbox is tricky — div elements don't always respond to click selectors
 - Message requests are at `https://www.instagram.com/direct/requests/`
 - DM threads don't have standard `<a>` links — they use React-based click handlers
 

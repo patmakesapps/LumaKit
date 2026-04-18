@@ -77,17 +77,24 @@
             </div>
         </div>
 
-        <!-- Confirm modal -->
-        <div id="confirm-modal" class="confirm-modal hidden">
-            <div class="confirm-box">
-                <p id="confirm-prompt"></p>
-                <div class="confirm-actions">
-                    <button id="confirm-yes" class="confirm-btn confirm-yes">Approve</button>
-                    <button id="confirm-no" class="confirm-btn confirm-no">Deny</button>
-                </div>
-            </div>
-        </div>
     </main>
+
+    <!-- Right-side diff panel (slides in when a diff is available) -->
+    <aside id="diff-panel" class="diff-panel hidden" aria-hidden="true">
+        <header class="diff-panel-header">
+            <div class="diff-panel-title">
+                <span id="diff-panel-tool" class="diff-panel-tool"></span>
+                <span id="diff-panel-path" class="diff-panel-path"></span>
+            </div>
+            <button id="diff-panel-close" class="diff-panel-close" title="Close">&times;</button>
+        </header>
+        <div id="diff-panel-body" class="diff-panel-body"></div>
+        <footer id="diff-panel-footer" class="diff-panel-footer">
+            <button id="diff-panel-deny" class="confirm-btn confirm-no">Deny</button>
+            <button id="diff-panel-approve" class="confirm-btn confirm-yes">Approve</button>
+        </footer>
+    </aside>
+    <div id="diff-panel-backdrop" class="diff-panel-backdrop hidden"></div>
 
     <script type="module" src="/static/js/app.js"></script>
 </body>

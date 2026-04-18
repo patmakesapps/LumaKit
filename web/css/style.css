@@ -563,47 +563,130 @@ body {
     display: none !important;
 }
 
-/* ===== Confirm modal ===== */
+/* ===== Inline confirm card (lives in the chat stream) ===== */
 
-.confirm-modal {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.65);
+.confirm-card {
+    margin: 10px 0 14px;
+    max-width: 560px;
+    background: linear-gradient(180deg, #1e1733 0%, #1a1428 100%);
+    border: 1px solid var(--accent-deep);
+    border-radius: var(--radius);
+    box-shadow: 0 2px 16px rgba(107, 63, 160, 0.18);
+    overflow: hidden;
+    animation: fadeIn 0.2s ease;
+}
+
+.confirm-card-head {
     display: flex;
     align-items: center;
-    justify-content: center;
-    z-index: 200;
-    backdrop-filter: blur(4px);
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: rgba(107, 63, 160, 0.08);
 }
 
-.confirm-box {
+.confirm-card-icon {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--accent-deep);
+    color: #fff;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.confirm-card-tool {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-light);
+    letter-spacing: 0.2px;
+}
+
+.confirm-card-prompt {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.confirm-card-detail {
+    padding: 10px 14px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border-subtle);
+    word-break: break-all;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.confirm-card-detail:empty {
+    display: none;
+}
+
+.confirm-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+}
+
+.confirm-card-diff-link {
+    margin-right: auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--accent-light);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.confirm-card-diff-link:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+}
+
+.confirm-card-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-right: auto;
+    user-select: none;
+}
+
+.confirm-card-hint kbd {
+    display: inline-block;
+    padding: 1px 6px;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent-light);
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 24px;
-    max-width: 420px;
-    width: 90%;
-    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+    border-radius: 4px;
+    margin: 0 2px;
 }
 
-.confirm-box p {
-    margin-bottom: 18px;
-    font-size: 15px;
-    line-height: 1.5;
-    color: var(--text-primary);
-}
-
-.confirm-actions {
-    display: flex;
-    gap: 10px;
-    justify-content: flex-end;
+/* When a diff link is present, it takes the margin-right:auto slot — demote the hint */
+.confirm-card-diff-link + .confirm-card-hint {
+    margin-right: 4px;
 }
 
 .confirm-btn {
-    padding: 8px 20px;
+    padding: 7px 16px;
     border: none;
     border-radius: var(--radius-sm);
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.15s;
@@ -611,7 +694,7 @@ body {
 
 .confirm-yes {
     background: var(--accent-deep);
-    color: white;
+    color: #fff;
 }
 
 .confirm-yes:hover {
@@ -627,6 +710,165 @@ body {
 .confirm-no:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+}
+
+.confirm-card.resolved .confirm-card-actions {
+    display: none;
+}
+
+.confirm-card.resolved {
+    border-color: var(--border);
+    box-shadow: none;
+}
+
+.confirm-card-status {
+    display: none;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.confirm-card.resolved .confirm-card-status {
+    display: block;
+}
+
+.confirm-card-status.approved { color: var(--success); }
+.confirm-card-status.denied { color: var(--text-muted); }
+
+/* ===== Right-side diff panel ===== */
+
+.diff-panel-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 199;
+    animation: fadeIn 0.15s ease;
+}
+
+.diff-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(560px, 92vw);
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border);
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+    z-index: 200;
+    transform: translateX(0);
+    transition: transform 0.25s ease;
+}
+
+.diff-panel.hidden {
+    display: flex !important;
+    transform: translateX(100%);
+    pointer-events: none;
+}
+
+.diff-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-primary);
+    flex-shrink: 0;
+}
+
+.diff-panel-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.diff-panel-tool {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.diff-panel-path {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.diff-panel-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    transition: color 0.15s;
+}
+
+.diff-panel-close:hover {
+    color: var(--text-primary);
+}
+
+.diff-panel-body {
+    flex: 1;
+    overflow: auto;
+    padding: 14px 0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    background: #0b0814;
+}
+
+.diff-line {
+    padding: 0 18px;
+    white-space: pre;
+    color: var(--text-secondary);
+    border-left: 2px solid transparent;
+}
+
+.diff-line.diff-add {
+    background: rgba(74, 222, 128, 0.08);
+    color: #a8e6c1;
+    border-left-color: var(--success);
+}
+
+.diff-line.diff-del {
+    background: rgba(248, 113, 113, 0.08);
+    color: #f0b4b4;
+    border-left-color: var(--error);
+}
+
+.diff-line.diff-hunk {
+    background: rgba(107, 63, 160, 0.12);
+    color: var(--accent-light);
+    border-left-color: var(--accent-deep);
+    padding: 2px 18px;
+    margin: 4px 0;
+    font-weight: 500;
+}
+
+.diff-panel-footer {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    padding: 12px 18px;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-primary);
+    flex-shrink: 0;
+}
+
+.diff-panel-footer.hidden {
+    display: none;
 }
 
 /* ===== Tasks ===== */
@@ -760,5 +1002,13 @@ body {
 
     .chat-view-centered .composer-wrapper {
         padding-bottom: 15vh;
+    }
+
+    .diff-panel {
+        width: 100vw;
+    }
+
+    .confirm-card {
+        max-width: 100%;
     }
 }

@@ -19,10 +19,15 @@ const $modelBadge = document.getElementById('model-badge');
 const $statusDot = document.getElementById('status-dot');
 const $sidebarToggle = document.getElementById('sidebar-toggle');
 const $sidebar = document.getElementById('sidebar');
-const $confirmModal = document.getElementById('confirm-modal');
-const $confirmPrompt = document.getElementById('confirm-prompt');
-const $confirmYes = document.getElementById('confirm-yes');
-const $confirmNo = document.getElementById('confirm-no');
+const $diffPanel = document.getElementById('diff-panel');
+const $diffPanelBackdrop = document.getElementById('diff-panel-backdrop');
+const $diffPanelTool = document.getElementById('diff-panel-tool');
+const $diffPanelPath = document.getElementById('diff-panel-path');
+const $diffPanelBody = document.getElementById('diff-panel-body');
+const $diffPanelFooter = document.getElementById('diff-panel-footer');
+const $diffPanelClose = document.getElementById('diff-panel-close');
+const $diffPanelApprove = document.getElementById('diff-panel-approve');
+const $diffPanelDeny = document.getElementById('diff-panel-deny');
 const $navTasks = document.getElementById('nav-tasks');
 const $navSettings = document.getElementById('nav-settings');
 const $taskList = document.getElementById('task-list');
@@ -33,6 +38,8 @@ let isWorking = false;
 let currentView = 'chat';
 let currentChatId = null;
 let statusEl = null;
+// Pending confirm card awaiting a decision (only one at a time)
+let pendingConfirm = null;
 
 // --- Markdown setup ---
 if (window.marked) {
@@ -254,7 +261,14 @@ const ws = new WS({
     response(data) {
         setWorking(false);
         removeStatus();
-        addMessage('assistant', data.text);
+        const text = (data.text || '').trim();
+        if (text) {
+            addMessage('assistant', text);
+        } else {
+            // Agent finished but produced no text — surface a subtle marker so
+            // the UI doesn't look frozen after a tool-only round.
+            addMessage('assistant', '_Done._');
+        }
 
         if (data.title) {
             $topbarTitle.textContent = data.title;
@@ -283,8 +297,7 @@ const ws = new WS({
     },
 
     confirm(data) {
-        $confirmPrompt.textContent = data.prompt;
-        $confirmModal.classList.remove('hidden');
+        showConfirmCard(data);
     },
 
     chat_loaded(data) {
@@ -309,16 +322,143 @@ const ws = new WS({
     },
 });
 
-// --- Confirm modal handlers ---
-$confirmYes.onclick = () => {
-    ws.send({ type: 'confirm_response', approved: true });
-    $confirmModal.classList.add('hidden');
-};
+// --- Inline confirm card + right-side diff panel ---
 
-$confirmNo.onclick = () => {
-    ws.send({ type: 'confirm_response', approved: false });
-    $confirmModal.classList.add('hidden');
-};
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function renderDiffLines(diffText) {
+    const lines = diffText.split('\n');
+    const out = [];
+    for (const line of lines) {
+        // Skip the unified-diff file headers — the panel header already shows the path
+        if (line.startsWith('--- ') || line.startsWith('+++ ')) continue;
+        let cls = 'diff-line';
+        if (line.startsWith('@@')) cls += ' diff-hunk';
+        else if (line.startsWith('+')) cls += ' diff-add';
+        else if (line.startsWith('-')) cls += ' diff-del';
+        out.push(`<div class="${cls}">${escapeHtml(line) || '&nbsp;'}</div>`);
+    }
+    return out.join('');
+}
+
+function openDiffPanel(data) {
+    $diffPanelTool.textContent = data.tool_name || 'diff';
+    $diffPanelPath.textContent = data.path || data.detail || '';
+    $diffPanelBody.innerHTML = renderDiffLines(data.diff || '');
+    // Panel carries its own approve/deny buttons only while a decision is pending
+    $diffPanelFooter.classList.toggle('hidden', !pendingConfirm);
+    $diffPanel.classList.remove('hidden');
+    $diffPanelBackdrop.classList.remove('hidden');
+    $diffPanelBody.scrollTop = 0;
+}
+
+function closeDiffPanel() {
+    $diffPanel.classList.add('hidden');
+    $diffPanelBackdrop.classList.add('hidden');
+}
+
+function resolveConfirmCard(approved) {
+    if (!pendingConfirm) return;
+    const { card, data } = pendingConfirm;
+    card.classList.add('resolved');
+    const status = card.querySelector('.confirm-card-status');
+    if (status) {
+        status.classList.add(approved ? 'approved' : 'denied');
+        status.textContent = approved ? '\u2713 Approved' : '\u2717 Denied';
+    }
+    ws.send({ type: 'confirm_response', approved });
+    pendingConfirm = null;
+    closeDiffPanel();
+}
+
+function showConfirmCard(data) {
+    removeStatus();
+    if ($emptyState && !$emptyState.classList.contains('hidden')) {
+        $emptyState.classList.add('hidden');
+        exitCenteredMode();
+    }
+
+    // The tool_call card emitted just before the confirm is redundant with the
+    // richer confirm card we're about to render — fold them into one.
+    const last = $messagesInner.lastElementChild;
+    if (last && last.classList.contains('tool-card') && !last.classList.contains('result')) {
+        last.remove();
+    }
+
+    const toolName = data.tool_name || 'action';
+    const detail = data.detail || '';
+    const prompt = data.prompt || 'Approve this action?';
+    const hasDiff = !!(data.diff && data.diff.trim());
+
+    const card = document.createElement('div');
+    card.className = 'confirm-card';
+    card.innerHTML = `
+        <div class="confirm-card-head">
+            <span class="confirm-card-icon">\u2713</span>
+            <span class="confirm-card-tool">${escapeHtml(toolName)}</span>
+            <span class="confirm-card-prompt">${escapeHtml(prompt)}</span>
+        </div>
+        <div class="confirm-card-detail">${escapeHtml(detail)}</div>
+        <div class="confirm-card-actions">
+            ${hasDiff ? '<button class="confirm-card-diff-link">View diff \u2192</button>' : ''}
+            <span class="confirm-card-hint"><kbd>Y</kbd> approve &middot; <kbd>N</kbd> deny</span>
+            <button class="confirm-btn confirm-no">Deny (N)</button>
+            <button class="confirm-btn confirm-yes">Approve (Y)</button>
+        </div>
+        <div class="confirm-card-status"></div>
+    `;
+
+    $messagesInner.appendChild(card);
+    scrollToBottom();
+
+    pendingConfirm = { card, data };
+
+    // Pull focus off the composer so Y/N keystrokes land here, not in the textarea
+    if (document.activeElement === $input) $input.blur();
+
+    card.querySelector('.confirm-yes').onclick = () => resolveConfirmCard(true);
+    card.querySelector('.confirm-no').onclick = () => resolveConfirmCard(false);
+    if (hasDiff) {
+        card.querySelector('.confirm-card-diff-link').onclick = () => openDiffPanel(data);
+        // Auto-open the panel so the user can see the diff immediately
+        openDiffPanel(data);
+    }
+}
+
+$diffPanelClose.onclick = closeDiffPanel;
+$diffPanelBackdrop.onclick = closeDiffPanel;
+$diffPanelApprove.onclick = () => resolveConfirmCard(true);
+$diffPanelDeny.onclick = () => resolveConfirmCard(false);
+
+document.addEventListener('keydown', (e) => {
+    // Don't intercept while the user is typing in the composer
+    const typing = document.activeElement === $input;
+
+    if (pendingConfirm && !typing) {
+        const k = e.key.toLowerCase();
+        if (k === 'y' || k === 'enter') {
+            e.preventDefault();
+            resolveConfirmCard(true);
+            return;
+        }
+        if (k === 'n') {
+            e.preventDefault();
+            resolveConfirmCard(false);
+            return;
+        }
+    }
+
+    if (e.key === 'Escape') {
+        if (!$diffPanel.classList.contains('hidden')) {
+            closeDiffPanel();
+        }
+    }
+});
 
 // --- Send message ---
 // Users can send multiple messages in a row without waiting for a response.
