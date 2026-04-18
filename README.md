@@ -2,18 +2,25 @@
 
 ![LumaKit Logo](photos/lumakit_cat_logo.png)
 
-**A local-first AI agent that runs on your own hardware, powered by [Ollama](https://ollama.com), and controlled from your phone via Telegram.**
+**A local-first AI agent that runs on your own hardware, powered by [Ollama](https://ollama.com), and controlled from a local web UI or Telegram.**
 
 LumaKit gives a local LLM a full tool suite — repo ops, shell and Python execution, web search, a headless browser with persistent logins, email, screen capture, and more — and can work autonomously in the background while you live your life. Everything stays on your machine. No OpenAI, no Anthropic, no cloud round-trips. Your model, your data, your rules.
 
+Today, the web UI and Telegram bridge are separate runtime entrypoints. You can run either surface on its own, or run both side by side.
+
 ---
 
-## Why Telegram?
+## Surfaces
 
-Telegram turns LumaKit into a proper assistant — always in your pocket, always on.
+LumaKit currently has two user-facing surfaces:
 
-- **Message from anywhere.** Your agent is a DM away, whether you're at your desk or out walking the dog.
-- **Photos in, photos out.** Drop in an image and ask what it is (vision-capable models only). Ask Lumi to screenshot her progress and she sends it back.
+- **Web UI** for local desktop use: chat history, tool approvals, task/settings panels, inline reactions, and inline screenshots/images.
+- **Telegram** for mobile/on-the-go use: photos, voice notes, reminders, and long-running tasks that report back in your pocket.
+
+Telegram is still the best mobile surface, but this branch adds real browser-first usage instead of treating web as a thin afterthought.
+
+- **Message from desktop or phone.** Use the local web app when you're at your machine and Telegram when you're away from it.
+- **Photos in, photos out.** Drop in an image and ask what it is (vision-capable models only). Ask Lumi to screenshot her progress and she sends it back to the current surface.
 - **Voice in, voice out.** Record a voice note and Lumi transcribes it locally via `whisper.cpp`, replies, and optionally reads the reply back as an Edge-TTS voice memo.
 - **Household-ready.** Multi-user support with owner/admin controls. Everyone gets their own conversation history, personality overrides, and reminders.
 - **Autonomy that reports back.** Kick off a multi-hour task and Lumi pings you when it's blocked, and again when it's done.
@@ -35,7 +42,8 @@ If a tool seems inconsistent, try a stronger model before assuming the tool is b
 
 - **Tool-calling agent** — auto-discovers tools from `tools/` and runs the model in multi-round tool-use loops.
 - **Autonomous task runner** — give Lumi a goal and a deadline; she plans, executes, self-evaluates, and reports back. All state persisted in SQLite so tasks survive restarts.
-- **Telegram bridge** — primary user interface. Multi-user, photo/vision, voice in/out, admin controls.
+- **Web UI** — browser-based chat surface with saved conversations, tool activity, approval cards with diffs, task/settings views, inline reactions, and inline delivered screenshots/images.
+- **Telegram bridge** — mobile-friendly chat surface with multi-user support, photo/vision, voice in/out, admin controls, and reminder/task delivery.
 - **CLI interface** — interactive chat with slash commands, clipboard image pasting, chat history, storage management.
 - **Autonomous email** — give the agent its own Gmail account; she polls every 60s, drafts replies, and requires one-tap approval before sending. Owner-only, with codebase-leak filtering, rate limiting, and URL stripping. See [docs/gmail_setup.md](docs/gmail_setup.md).
 - **Headless browser** — Playwright + Chromium, driven by the model. Form introspection (`inspect_forms`) hands the model real verified selectors so it can fill React/SPA pages without guessing.
@@ -43,12 +51,14 @@ If a tool seems inconsistent, try a stronger model before assuming the tool is b
 - **Instagram ops** — a thin `instagram_session` tool + self-maintained `instagram/notes.md` (selectors, UI quirks, shortcuts) keep Lumi productive on Instagram across sessions. See [Instagram](#instagram) below.
 - **Identity file** — `lumi/identity.txt` stores Lumi's own accounts and credentials; surfaced in the system prompt so she checks it before signing up for anything new and appends new accounts after creating them.
 - **Family & personal reminders** — per-user reminders plus household-wide broadcasts. See [docs/family_alerts.md](docs/family_alerts.md).
-- **Screenshot tool** — the agent can grab the current screen and push it to the owner over Telegram.
+- **Surface-aware image delivery** — screenshots and existing image files can be sent back to the current surface: inline in the web UI or as Telegram photos.
+- **Lightweight reactions** — Lumi can react to user messages; Telegram keeps its native feel and the web UI now shows lightweight reaction pills too.
 - **Heartbeat** — background check-ins when the owner has been quiet.
 - **Code intelligence** — tree-sitter-backed symbol table for definition lookup, usage search, and call graphs.
 - **Memory & reminders** — persistent SQLite memory store and a background reminder thread.
 - **Context management** — automatic conversation summarization to keep context lean.
 - **Storage budgeting** — tracks local data usage with configurable budgets and cleanup prompts.
+- **Faster interrupt handling** — `/stop` now propagates through active model calls and long-running shell/Python work much faster instead of waiting for outer loop boundaries.
 
 ---
 
@@ -77,6 +87,7 @@ Copy `.env.example` to `.env` and set the values you want to use.
 | `OLLAMA_MODEL` | Primary model for chat requests |
 | `OLLAMA_FALLBACK_MODEL` | Fallback model if primary is unavailable |
 | `OLLAMA_LOCAL_MODEL` | Optional local model the Telegram owner can switch to with `/model local on` |
+| `LUMAKIT_WEB_PORT` | Optional — port for the local web UI, default `7865` |
 | `SERPAPI_KEY` | Optional — enables premium web search |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather (for Telegram bridge) |
 | `TELEGRAM_ALLOWED_IDS` | Comma-separated Telegram chat IDs (first = owner/admin) |
@@ -91,6 +102,25 @@ Copy `.env.example` to `.env` and set the values you want to use.
 | `LUMI_EMAIL_MAX_PER_HOUR` | Rate limit on outbound email sends (default 10) |
 
 ## Usage
+
+### Web UI
+
+```bash
+python web_bridge.py
+```
+
+Then open `http://localhost:7865` in your browser, or set `LUMAKIT_WEB_PORT` to use a different port.
+
+The web UI supports:
+
+- saved chats
+- tool activity cards
+- inline approval prompts with diff review
+- `/stop` from the composer
+- inline reactions on user messages
+- inline delivered screenshots and images
+
+For now, the web UI is a separate runtime from Telegram. If you want both desktop and mobile access at the same time, run both `web_bridge.py` and `telegram_bridge.py`.
 
 ### CLI
 
@@ -186,6 +216,7 @@ main.py                 CLI entry point
 agent.py                Core agent loop (tool dispatch, diff preview, confirmation)
 ollama_client.py        Ollama HTTP client with fallback and timeout support
 telegram_bridge.py      Telegram bridge entry point — poll loop and background services
+web_bridge.py           Web UI bridge entry point — FastAPI app + WebSocket chat surface
 tool_registry.py        Auto-discovers and registers tools from tools/
 
 core/
@@ -197,10 +228,13 @@ core/
   email_checker.py      Background IMAP poller + LLM triage + one-shot draft approval
   email_filter.py       URL stripper, codebase-leak scanner, rate limiter, audit log
   heartbeat.py          Periodic owner check-ins when chat has been idle
+  interface_context.py  Tracks which surface/user the current run is serving
+  interrupts.py         Cooperative cancellation helpers for fast /stop handling
   memory_store.py       SQLite-backed memory/reminder storage
   menu.py               Interactive selection menu
   paths.py              Repo root detection and path resolution
   reminder_checker.py   Background reminder polling thread
+  runtime_config.py     Shared per-surface/per-user runtime model configuration
   storage.py            Storage budget tracking
   summarizer.py         Conversation summarization logic
   task_runner.py        Autonomous task execution engine — plan, execute, evaluate, report
@@ -213,7 +247,7 @@ core/
 
 tools/
   code_intel/           Code index (tree-sitter) — symbol table, parsers, cache
-  comms/                Communication tools (telegram, email, screenshot, reactions)
+  comms/                Communication tools (telegram, email, reactions, surface-aware image delivery)
   memory/               Memory and reminder tools (save, recall, remind)
   repo/                 File and git operations (read, write, edit, delete, search, diff, git)
   runtime/              Shell, Python, system tools (restart_service, storage, clipboard*)
@@ -224,8 +258,14 @@ lumi/                   Lumi's private data — gitignored
 
 instagram/              Lumi's Instagram playbook and activity — gitignored (see above)
 
+web/                    Static assets for the browser UI
+  index.html            Web UI shell
+  css/                  Styling
+  js/                   WebSocket app + client logic
+
 ~/.lumakit/             Persistent per-user data (outside the repo)
   browser_profiles/     Playwright storage_state files for persistent logins
+  web_media/            Staged images/screenshots served inline to the web UI
 ```
 
 *Clipboard tools require a display and are not available in headless/server mode.*
