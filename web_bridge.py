@@ -39,7 +39,11 @@ from core.chat_store import (
 )
 from core.cli import Spinner
 from core.paths import get_data_dir
+from core.runtime_config import apply_user_runtime
+from core.telegram_state import OWNER_ID
 from core import task_store, memory_store
+from tools.comms.react import set_react_context
+from tools.memory.memory_tools import set_active_user as set_memory_active_user
 
 # Disable the spinner — not useful in web mode
 Spinner.start = lambda self: self
@@ -47,6 +51,7 @@ Spinner.stop = lambda self: None
 
 PORT = int(os.getenv("LUMAKIT_WEB_PORT", "7865"))
 WEB_DIR = Path(__file__).resolve().parent / "web"
+WEB_USER_ID = str(OWNER_ID) if OWNER_ID else "web_owner"
 
 app = FastAPI(title="LumaKit")
 
@@ -182,6 +187,15 @@ def _tool_status(tool_name: str, inputs: dict) -> str:
     return f"Lumi is using {verb.lower()}..."
 
 
+def _prepare_web_turn(agent: Agent, session: dict):
+    """Apply the same per-turn runtime and identity setup used in Telegram."""
+    _auth.set_active_user(WEB_USER_ID)
+    set_memory_active_user(WEB_USER_ID)
+    set_react_context(None, None)
+    session["messages"] = agent.messages
+    apply_user_runtime(agent, session, WEB_USER_ID)
+
+
 def _make_agent(ws_id: int, send_fn):
     """Create an Agent wired to push status/tool events over WebSocket."""
 
@@ -296,7 +310,7 @@ async def websocket_chat(ws: WebSocket):
         except Exception:
             pass
 
-    _auth.set_active_user("web_owner")
+    _auth.set_active_user(WEB_USER_ID)
 
     agent = _make_agent(ws_id, send_sync)
     # If the client disconnects, abort the agent loop at the next check
@@ -304,19 +318,27 @@ async def websocket_chat(ws: WebSocket):
     _ws_confirm_events[ws_id] = threading.Event()
 
     # Session state
-    session = {"chat_id": new_chat_id(), "title": "", "first_message_sent": False}
+    session = {
+        "chat_id": new_chat_id(),
+        "title": "",
+        "first_message_sent": False,
+        "messages": agent.messages,
+    }
+    _prepare_web_turn(agent, session)
 
     async def run_agent_request(text: str):
         """Run the agent in a worker thread and emit the response when it finishes.
         This is fired as a separate task so the receive loop stays alive and can
         process confirm_response / stop messages while the agent is working."""
         try:
+            _prepare_web_turn(agent, session)
             response = await loop.run_in_executor(None, agent.ask_llm, text)
             reply = response.get("message", {}).get("content", "")
+            session["messages"] = agent.messages
             if not session["first_message_sent"]:
                 session["title"] = make_title(text)
                 session["first_message_sent"] = True
-            save_chat(session["chat_id"], session["title"], agent.messages)
+            save_chat(session["chat_id"], session["title"], session["messages"])
             if not ws_closed["v"]:
                 await ws.send_json({
                     "type": "response",
@@ -359,6 +381,9 @@ async def websocket_chat(ws: WebSocket):
 
             # Load a specific chat
             if msg_type == "load_chat":
+                if agent_task and not agent_task.done():
+                    await ws.send_json({"type": "error", "text": "Finish or stop the current run before switching chats."})
+                    continue
                 target_id = data.get("chat_id", "")
                 loaded = load_chat(target_id)
                 if loaded:
@@ -366,6 +391,8 @@ async def websocket_chat(ws: WebSocket):
                     session["title"] = loaded["title"]
                     session["first_message_sent"] = True
                     agent.messages = loaded["messages"]
+                    session["messages"] = agent.messages
+                    _prepare_web_turn(agent, session)
                     await ws.send_json({
                         "type": "chat_loaded",
                         "chat_id": session["chat_id"],
@@ -378,10 +405,15 @@ async def websocket_chat(ws: WebSocket):
 
             # New chat
             if msg_type == "new_chat":
+                if agent_task and not agent_task.done():
+                    await ws.send_json({"type": "error", "text": "Finish or stop the current run before starting a new chat."})
+                    continue
                 session["chat_id"] = new_chat_id()
                 session["title"] = ""
                 session["first_message_sent"] = False
                 agent.messages = [agent.build_system_message()]
+                session["messages"] = agent.messages
+                _prepare_web_turn(agent, session)
                 await ws.send_json({
                     "type": "chat_loaded",
                     "chat_id": session["chat_id"],
@@ -405,6 +437,13 @@ async def websocket_chat(ws: WebSocket):
                         _ws_confirm_results[ws_id] = False
                         ev.set()
                     await ws.send_json({"type": "status", "text": "Stopping..."})
+                    continue
+
+                if agent_task and not agent_task.done():
+                    await ws.send_json({
+                        "type": "status",
+                        "text": "Lumi is still working on the previous message. Wait for the reply or send /stop.",
+                    })
                     continue
 
                 await ws.send_json({"type": "status", "text": "Lumi is thinking..."})
@@ -437,7 +476,7 @@ async def websocket_chat(ws: WebSocket):
 # ---------------------------------------------------------------------------
 
 def main():
-    _auth.set_owner("web_owner")
+    _auth.set_owner(WEB_USER_ID)
 
     print(f"\n=== LumaKit Web UI ===")
     print(f"Open http://localhost:{PORT} in your browser\n")

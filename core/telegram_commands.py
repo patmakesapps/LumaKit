@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat
+from core.runtime_config import apply_user_runtime, get_owner_effective_config
 from core.telegram_io import poll_for_reply, send_message
 from core.telegram_state import (
     ALLOWED_IDS,
@@ -46,48 +47,9 @@ def resume_chat(chat_id_str, agent, session):
     send_message(f"Resumed: {chat['title']} ({len(chat['messages'])} messages)")
 
 
-# ---------------------------------------------------------------------------
-# Runtime config
-# ---------------------------------------------------------------------------
-
-def get_owner_effective_config(agent):
-    primary = OWNER_CONFIG.get("primary_model") or agent.default_model
-    fallback = OWNER_CONFIG.get("fallback_model") or agent.default_fallback_model
-    local_model = agent.local_model or ""
-    use_local_model = bool(OWNER_CONFIG.get("use_local_model"))
-
-    if use_local_model and local_model:
-        primary = local_model
-
-    return {
-        "primary_model": primary,
-        "fallback_model": fallback,
-        "system_prompt": OWNER_CONFIG.get("system_prompt", ""),
-        "use_local_model": use_local_model,
-        "local_model": local_model,
-    }
-
-
 def apply_chat_runtime(agent, session, chat_id):
     """Switch agent runtime config for the active Telegram user."""
-    user_cfg = _get_user_config(chat_id)
-    personality_prompt = user_cfg.get("personality_prompt") or None
-    if str(chat_id) == str(OWNER_ID):
-        config = get_owner_effective_config(agent)
-        agent.apply_runtime_overrides(
-            messages=agent.messages,
-            model=config["primary_model"],
-            fallback_model=config["fallback_model"],
-            extra_instructions=personality_prompt,
-        )
-    else:
-        agent.apply_runtime_overrides(
-            messages=agent.messages,
-            model=agent.default_model,
-            fallback_model=agent.default_fallback_model,
-            extra_instructions=personality_prompt,
-        )
-    session["messages"] = agent.messages
+    apply_user_runtime(agent, session, chat_id)
 
 
 # ---------------------------------------------------------------------------

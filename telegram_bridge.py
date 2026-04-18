@@ -29,6 +29,7 @@ from core.cli import Spinner
 from core.email_checker import EmailChecker
 from core.heartbeat import Heartbeat
 from core.reminder_checker import ReminderChecker
+from core.runtime_config import get_owner_effective_config
 from core.task_runner import TaskRunner
 from core.telegram_api import (
     download_telegram_file,
@@ -218,7 +219,6 @@ def main():
 
     def email_ask_llm(prompt):
         from ollama_client import OllamaClient
-        from core.telegram_commands import get_owner_effective_config
         owner_cfg = get_owner_effective_config(agent)
         client = OllamaClient(fallback_model=owner_cfg["fallback_model"])
         response = client.chat(
