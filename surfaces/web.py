@@ -30,6 +30,7 @@ import uvicorn
 
 from agent import Agent
 from core import auth as _auth
+from core import email_draft_store
 from core.chat_store import (
     delete_chat,
     get_active_chat,
@@ -49,6 +50,7 @@ from core.runtime_config import apply_user_runtime
 from core.service import LumaKitService, Surface
 from core.telegram_state import OWNER_ID
 from core import task_store, memory_store
+from tools.comms.email import send_preapproved
 from tools.comms.react import set_react_context
 from tools.memory.memory_tools import set_active_user as set_memory_active_user
 
@@ -138,6 +140,12 @@ async def api_list_notifications():
     return notification_log.recent(WEB_USER_ID, limit=50)
 
 
+@app.get("/api/notifications/unshown")
+async def api_list_unshown_notifications():
+    notifications = notification_log.claim_unshown_for_web(WEB_USER_ID, limit=50)
+    return [_notification_to_web_event(item) for item in notifications]
+
+
 @app.get("/api/settings")
 async def api_get_settings():
     return {
@@ -160,6 +168,80 @@ _ws_confirm_results: dict[int, bool] = {}
 _ws_tool_ctx: dict[int, dict] = {}
 _web_clients_lock = threading.RLock()
 _web_clients: dict[str, set] = {}
+_EMAIL_AFFIRM = {"yes", "y", "yep", "yeah", "send", "send it", "do it", "ok", "okay", "sure"}
+_EMAIL_DENY = {"no", "n", "nah", "skip", "cancel", "nope", "don't", "dont"}
+
+
+def _notification_to_web_event(notification: dict) -> dict:
+    meta = notification.get("meta") or {}
+    if notification.get("label"):
+        event = {
+            "type": "reminder",
+            "text": notification.get("content", ""),
+            "label": notification.get("label") or "Reminder",
+        }
+    else:
+        event = {
+            "type": "message",
+            "text": notification.get("content", ""),
+        }
+        if meta.get("kind"):
+            event["kind"] = meta["kind"]
+        if meta.get("email"):
+            event["email"] = meta["email"]
+    if notification.get("id") is not None:
+        event["notification_id"] = notification["id"]
+    if meta.get("draft_id") is not None:
+        event["draft_id"] = meta["draft_id"]
+    return event
+
+
+def _handle_email_draft_action(action: str, draft_id: int | None = None) -> dict:
+    current = email_draft_store.get_pending(draft_id) if draft_id is not None else email_draft_store.get_latest_pending()
+    if not current:
+        return {
+            "type": "email_draft_result",
+            "draft_id": draft_id,
+            "approved": action == "approve",
+            "ok": False,
+            "text": "That draft was already handled.",
+        }
+
+    claimed = email_draft_store.pop_pending(current["id"])
+    if not claimed:
+        return {
+            "type": "email_draft_result",
+            "draft_id": current["id"],
+            "approved": action == "approve",
+            "ok": False,
+            "text": "That draft was already handled.",
+        }
+
+    if action == "discard":
+        return {
+            "type": "email_draft_result",
+            "draft_id": claimed["id"],
+            "approved": False,
+            "ok": True,
+            "text": "Draft discarded.",
+        }
+
+    result = send_preapproved(claimed["to_addr"], claimed["subject"], claimed["body"])
+    if result.get("sent"):
+        return {
+            "type": "email_draft_result",
+            "draft_id": claimed["id"],
+            "approved": True,
+            "ok": True,
+            "text": f"Sent to {claimed['from_label']}.",
+        }
+    return {
+        "type": "email_draft_result",
+        "draft_id": claimed["id"],
+        "approved": True,
+        "ok": False,
+        "text": f"Couldn't send: {result.get('error', 'unknown error')}",
+    }
 
 
 def _tool_detail(tool_name: str, inputs: dict) -> str:
@@ -260,8 +342,18 @@ def _web_deliver(payload: dict) -> bool:
         msg = {"type": "reminder", "text": content, "label": label}
     else:
         msg = {"type": "message", "text": content}
+        meta = payload.get("meta") or {}
+        if meta.get("kind"):
+            msg["kind"] = meta["kind"]
+        if meta.get("email"):
+            msg["email"] = meta["email"]
+        if meta.get("draft_id") is not None:
+            msg["draft_id"] = meta["draft_id"]
     for callback in callbacks:
         callback(msg)
+    notification_id = payload.get("notification_id")
+    if notification_id is not None:
+        notification_log.mark_shown_on_web([notification_id])
     return True
 
 
@@ -377,11 +469,32 @@ def _make_agent(ws_id: int, send_fn):
             return _ws_confirm_results.get(ws_id, False)
         return True  # default to allow if something goes wrong
 
+    def ws_confirm_email(preview, prompt=None):
+        ctx = _ws_tool_ctx.get(ws_id) or {}
+        send_fn({
+            "type": "confirm",
+            "kind": "email",
+            "prompt": prompt or "Approve this email?",
+            "tool_name": ctx.get("tool_name"),
+            "args": ctx.get("args") or {},
+            "detail": ctx.get("detail") or "",
+            "path": ctx.get("path"),
+            "diff": ctx.get("diff"),
+            "email_preview": preview,
+        })
+        event = _ws_confirm_events.get(ws_id)
+        if event:
+            event.wait(timeout=300)
+            event.clear()
+            return _ws_confirm_results.get(ws_id, False)
+        return True
+
     display = DisplayHooks(
         show_tool_call=ws_show_tool_call,
         show_tool_result=ws_show_tool_result,
         show_diff=ws_show_diff,
         confirm=ws_confirm,
+        confirm_email=ws_confirm_email,
     )
 
     agent = Agent(
@@ -455,15 +568,10 @@ async def websocket_chat(ws: WebSocket):
 
     # Replay notifications the user hasn't seen on web yet — bridges the
     # "got pinged on Telegram while away" gap.
-    missed = notification_log.unshown_for_web(WEB_USER_ID)
+    missed = notification_log.claim_unshown_for_web(WEB_USER_ID)
     if missed:
         for n in missed:
-            await ws.send_json({
-                "type": "reminder",
-                "text": n["content"],
-                "label": n["label"] or "Reminder",
-            })
-        notification_log.mark_shown_on_web([n["id"] for n in missed])
+            await ws.send_json(_notification_to_web_event(n))
 
     async def run_agent_request(text: str):
         """Run the agent in a worker thread and emit the response when it finishes.
@@ -516,6 +624,20 @@ async def websocket_chat(ws: WebSocket):
                 event = _ws_confirm_events.get(ws_id)
                 if event:
                     event.set()
+                continue
+
+            if msg_type == "email_draft_action":
+                action = data.get("action", "")
+                if action not in {"approve", "discard"}:
+                    await ws.send_json({"type": "error", "text": "Invalid email draft action"})
+                    continue
+                draft_id_raw = data.get("draft_id")
+                try:
+                    draft_id = int(draft_id_raw) if draft_id_raw is not None else None
+                except (TypeError, ValueError):
+                    await ws.send_json({"type": "error", "text": "Invalid draft id"})
+                    continue
+                await ws.send_json(_handle_email_draft_action(action, draft_id))
                 continue
 
             # Explicit stop button (legacy — UI now uses /stop instead)
@@ -577,6 +699,14 @@ async def websocket_chat(ws: WebSocket):
             if msg_type == "message":
                 text = data.get("text", "").strip()
                 if not text:
+                    continue
+
+                normalized = text.lower()
+                if normalized in _EMAIL_AFFIRM and email_draft_store.get_latest_pending():
+                    await ws.send_json(_handle_email_draft_action("approve"))
+                    continue
+                if normalized in _EMAIL_DENY and email_draft_store.get_latest_pending():
+                    await ws.send_json(_handle_email_draft_action("discard"))
                     continue
 
                 # Telegram-style /stop: interrupt the current run

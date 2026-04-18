@@ -40,6 +40,8 @@ let statusEl = null;
 // Pending confirm card awaiting a decision (only one at a time)
 let pendingConfirm = null;
 let currentTurnHadRichReply = false;
+let notificationPollTimer = null;
+const emailDraftCards = new Map();
 
 // --- Markdown setup ---
 if (window.marked) {
@@ -114,6 +116,234 @@ function addMessage(role, content) {
     scrollToBottom();
 
     // Highlight code blocks
+    if (window.hljs) {
+        div.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+    }
+}
+
+function formatPlainText(text) {
+    return escapeHtml(String(text || '')).replace(/\n/g, '<br>');
+}
+
+function renderEmailSections(email, { includeDraft = true } = {}) {
+    const bodyPreview = email?.body_preview || '';
+    const summary = email?.summary || '';
+    const draftPreview = includeDraft ? (email?.draft_preview || '') : '';
+    const links = Array.isArray(email?.links) ? email.links : [];
+
+    const sections = [];
+
+    if (bodyPreview) {
+        sections.push(`
+            <div class="email-card-section">
+                <div class="email-card-section-title">Body</div>
+                <div class="email-card-section-body">${formatPlainText(bodyPreview)}</div>
+            </div>
+        `);
+    }
+
+    if (summary) {
+        sections.push(`
+            <div class="email-card-section">
+                <div class="email-card-section-title">Lumi's Take</div>
+                <div class="email-card-section-body">${formatPlainText(summary)}</div>
+            </div>
+        `);
+    }
+
+    if (draftPreview) {
+        sections.push(`
+            <div class="email-card-section">
+                <div class="email-card-section-title">Draft Reply</div>
+                <div class="email-card-section-body">${formatPlainText(draftPreview)}</div>
+            </div>
+        `);
+    }
+
+    if (links.length) {
+        const linkItems = links.map(link => `
+            <li class="email-card-link-item">
+                <span class="email-card-link-url">${escapeHtml(link.url || '')}</span>
+                <span class="email-card-link-label">${escapeHtml(link.label || '')}</span>
+            </li>
+        `).join('');
+        sections.push(`
+            <div class="email-card-section">
+                <div class="email-card-section-title">Links Lumi Could Not See</div>
+                <ul class="email-card-links">${linkItems}</ul>
+            </div>
+        `);
+    }
+
+    return sections.join('');
+}
+
+function renderIncomingEmailCard(email) {
+    return `
+        <div class="email-card">
+            <div class="email-card-head">
+                <span class="email-card-badge">New Email</span>
+                <span class="email-card-subtitle">Background notification</span>
+            </div>
+            <div class="email-card-meta">
+                <div class="email-card-row">
+                    <span class="email-card-key">From</span>
+                    <span class="email-card-value">${escapeHtml(email?.from || '')}</span>
+                </div>
+                <div class="email-card-row">
+                    <span class="email-card-key">Subject</span>
+                    <span class="email-card-value">${escapeHtml(email?.subject || '(no subject)')}</span>
+                </div>
+            </div>
+            ${renderEmailSections(email)}
+        </div>
+    `;
+}
+
+function renderEmailConfirmCard(data) {
+    const preview = data.email_preview || {};
+    const actionLabel = preview.action === 'reply' ? 'Reply Preview' : 'Email Preview';
+    const remaining = preview.remaining_after_send;
+    return `
+        <div class="confirm-card email-confirm-card">
+            <div class="confirm-card-head">
+                <span class="confirm-card-icon">✉</span>
+                <span class="confirm-card-tool">${escapeHtml(data.tool_name || 'email')}</span>
+                <span class="confirm-card-prompt">${escapeHtml(data.prompt || 'Approve this email?')}</span>
+            </div>
+            <div class="email-card">
+                <div class="email-card-head">
+                    <span class="email-card-badge">${escapeHtml(actionLabel)}</span>
+                    <span class="email-card-subtitle">Review before sending</span>
+                </div>
+                <div class="email-card-meta">
+                    <div class="email-card-row">
+                        <span class="email-card-key">To</span>
+                        <span class="email-card-value">${escapeHtml(preview.to || '')}</span>
+                    </div>
+                    ${preview.cc ? `
+                        <div class="email-card-row">
+                            <span class="email-card-key">CC</span>
+                            <span class="email-card-value">${escapeHtml(preview.cc)}</span>
+                        </div>
+                    ` : ''}
+                    <div class="email-card-row">
+                        <span class="email-card-key">Subject</span>
+                        <span class="email-card-value">${escapeHtml(preview.subject || '(no subject)')}</span>
+                    </div>
+                    ${typeof remaining === 'number' ? `
+                        <div class="email-card-row">
+                            <span class="email-card-key">Remaining</span>
+                            <span class="email-card-value">${escapeHtml(String(remaining))} send(s) after approval</span>
+                        </div>
+                    ` : ''}
+                </div>
+                <div class="email-card-section">
+                    <div class="email-card-section-title">Message</div>
+                    <div class="email-card-section-body">${formatPlainText(preview.body || '')}</div>
+                </div>
+            </div>
+            <div class="confirm-card-actions">
+                <span class="confirm-card-hint"><kbd>Y</kbd> approve &middot; <kbd>N</kbd> deny</span>
+                <button class="confirm-btn confirm-no">Deny (N)</button>
+                <button class="confirm-btn confirm-yes">Approve (Y)</button>
+            </div>
+            <div class="confirm-card-status"></div>
+        </div>
+    `;
+}
+
+function setEmailDraftPendingState(draftId, pendingText) {
+    const entry = emailDraftCards.get(String(draftId));
+    if (!entry) return;
+    entry.approve.disabled = true;
+    entry.discard.disabled = true;
+    entry.status.textContent = pendingText;
+    entry.status.classList.remove('approved', 'denied');
+    entry.status.classList.add('pending');
+}
+
+function resolveEmailDraftCard(data) {
+    const draftId = data.draft_id != null ? String(data.draft_id) : null;
+    const entry = draftId ? emailDraftCards.get(draftId) : null;
+    if (!entry) {
+        addMessage('assistant', `${data.ok ? '✓' : '✗'} ${data.text}`);
+        return;
+    }
+
+    entry.actions.remove();
+    entry.status.textContent = `${data.ok ? '✓' : '✗'} ${data.text}`;
+    entry.status.classList.remove('pending');
+    entry.status.classList.add(data.ok ? 'approved' : 'denied');
+    emailDraftCards.delete(draftId);
+    scrollToBottom();
+}
+
+function addBackgroundMessage(data) {
+    const text = (data.text || '').trim();
+    if (!text) return;
+
+    const draftId = data.draft_id != null ? String(data.draft_id) : null;
+    if (draftId && emailDraftCards.has(draftId)) {
+        return;
+    }
+
+    if ($emptyState && !$emptyState.classList.contains('hidden')) {
+        $emptyState.classList.add('hidden');
+        exitCenteredMode();
+    }
+    removeStatus();
+
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+    div.dataset.role = 'assistant';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    if (data.kind === 'email' && data.email) {
+        div.classList.add('email-card-message');
+        bubble.innerHTML = renderIncomingEmailCard(data.email);
+    } else {
+        bubble.innerHTML = renderMarkdown(text);
+    }
+    div.appendChild(bubble);
+
+    if (draftId) {
+        const actionParent = data.kind === 'email' && data.email
+            ? bubble.querySelector('.email-card') || bubble
+            : bubble;
+        const actions = document.createElement('div');
+        actions.className = 'email-draft-actions';
+
+        const discard = document.createElement('button');
+        discard.className = 'confirm-btn confirm-no';
+        discard.textContent = 'Discard';
+        discard.onclick = () => {
+            setEmailDraftPendingState(draftId, 'Discarding...');
+            ws.send({ type: 'email_draft_action', action: 'discard', draft_id: Number(draftId) });
+        };
+
+        const approve = document.createElement('button');
+        approve.className = 'confirm-btn confirm-yes';
+        approve.textContent = 'Send';
+        approve.onclick = () => {
+            setEmailDraftPendingState(draftId, 'Sending...');
+            ws.send({ type: 'email_draft_action', action: 'approve', draft_id: Number(draftId) });
+        };
+
+        const status = document.createElement('div');
+        status.className = 'email-draft-status';
+
+        actions.appendChild(discard);
+        actions.appendChild(approve);
+        actionParent.appendChild(actions);
+        actionParent.appendChild(status);
+        emailDraftCards.set(draftId, { approve, discard, actions, status });
+    }
+
+    $messagesInner.appendChild(div);
+    scrollToBottom();
+
     if (window.hljs) {
         div.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
     }
@@ -346,16 +576,46 @@ async function loadHealth() {
     }
 }
 
+async function pollNotifications() {
+    if (!ws.connected) return;
+    try {
+        const res = await fetch('/api/notifications/unshown');
+        const notifications = await res.json();
+        for (const item of notifications) {
+            const handler = ws.handlers[item.type];
+            if (handler) handler(item);
+        }
+    } catch (e) {
+        console.error('Failed to poll notifications:', e);
+    }
+}
+
+function startNotificationPolling() {
+    if (notificationPollTimer) return;
+    notificationPollTimer = setInterval(() => {
+        pollNotifications();
+    }, 5000);
+    pollNotifications();
+}
+
+function stopNotificationPolling() {
+    if (!notificationPollTimer) return;
+    clearInterval(notificationPollTimer);
+    notificationPollTimer = null;
+}
+
 // --- WebSocket ---
 const ws = new WS({
     onConnect() {
         $statusDot.classList.remove('disconnected');
         loadChatList();
         loadHealth();
+        startNotificationPolling();
     },
 
     onDisconnect() {
         $statusDot.classList.add('disconnected');
+        stopNotificationPolling();
     },
 
     response(data) {
@@ -402,9 +662,17 @@ const ws = new WS({
         currentTurnHadRichReply = true;
     },
 
+    message(data) {
+        addBackgroundMessage(data);
+    },
+
     reminder(data) {
         const label = data.label || 'Reminder';
         addMessage('assistant', `🔔 ${label}: ${data.text}`);
+    },
+
+    email_draft_result(data) {
+        resolveEmailDraftCard(data);
     },
 
     error(data) {
@@ -515,37 +783,48 @@ function showConfirmCard(data) {
     const detail = data.detail || '';
     const prompt = data.prompt || 'Approve this action?';
     const hasDiff = !!(data.diff && data.diff.trim());
+    const isEmailConfirm = data.kind === 'email' && data.email_preview;
 
     const card = document.createElement('div');
-    card.className = 'confirm-card';
-    card.innerHTML = `
-        <div class="confirm-card-head">
-            <span class="confirm-card-icon">\u2713</span>
-            <span class="confirm-card-tool">${escapeHtml(toolName)}</span>
-            <span class="confirm-card-prompt">${escapeHtml(prompt)}</span>
-        </div>
-        <div class="confirm-card-detail">${escapeHtml(detail)}</div>
-        <div class="confirm-card-actions">
-            ${hasDiff ? '<button class="confirm-card-diff-link">View diff \u2192</button>' : ''}
-            <span class="confirm-card-hint"><kbd>Y</kbd> approve &middot; <kbd>N</kbd> deny</span>
-            <button class="confirm-btn confirm-no">Deny (N)</button>
-            <button class="confirm-btn confirm-yes">Approve (Y)</button>
-        </div>
-        <div class="confirm-card-status"></div>
-    `;
+    if (isEmailConfirm) {
+        // handled below via a detached wrapper so we can bind actions normally
+    } else {
+        card.className = 'confirm-card';
+        card.innerHTML = `
+            <div class="confirm-card-head">
+                <span class="confirm-card-icon">\u2713</span>
+                <span class="confirm-card-tool">${escapeHtml(toolName)}</span>
+                <span class="confirm-card-prompt">${escapeHtml(prompt)}</span>
+            </div>
+            <div class="confirm-card-detail">${escapeHtml(detail)}</div>
+            <div class="confirm-card-actions">
+                ${hasDiff ? '<button class="confirm-card-diff-link">View diff \u2192</button>' : ''}
+                <span class="confirm-card-hint"><kbd>Y</kbd> approve &middot; <kbd>N</kbd> deny</span>
+                <button class="confirm-btn confirm-no">Deny (N)</button>
+                <button class="confirm-btn confirm-yes">Approve (Y)</button>
+            </div>
+            <div class="confirm-card-status"></div>
+        `;
+    }
 
-    $messagesInner.appendChild(card);
+    const renderedCard = isEmailConfirm ? (() => {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = renderEmailConfirmCard(data);
+        return wrapper.firstElementChild;
+    })() : card;
+
+    $messagesInner.appendChild(renderedCard);
     scrollToBottom();
 
-    pendingConfirm = { card, data };
+    pendingConfirm = { card: renderedCard, data };
 
     // Pull focus off the composer so Y/N keystrokes land here, not in the textarea
     if (document.activeElement === $input) $input.blur();
 
-    card.querySelector('.confirm-yes').onclick = () => resolveConfirmCard(true);
-    card.querySelector('.confirm-no').onclick = () => resolveConfirmCard(false);
-    if (hasDiff) {
-        card.querySelector('.confirm-card-diff-link').onclick = () => openDiffPanel(data);
+    renderedCard.querySelector('.confirm-yes').onclick = () => resolveConfirmCard(true);
+    renderedCard.querySelector('.confirm-no').onclick = () => resolveConfirmCard(false);
+    if (hasDiff && !isEmailConfirm) {
+        renderedCard.querySelector('.confirm-card-diff-link').onclick = () => openDiffPanel(data);
         // Auto-open the panel so the user can see the diff immediately
         openDiffPanel(data);
     }

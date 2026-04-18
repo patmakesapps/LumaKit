@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from core.cli import DIM, Spinner, _c
-from core.display import DisplayHooks
+from core.display import DisplayHooks, use_display
 from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
 from core.interrupts import interrupt_context
 from core.paths import get_data_dir, get_repo_root
@@ -650,7 +650,7 @@ class Agent:
         return {"message": {"role": "assistant", "content": stop_msg}}
 
     def ask_llm(self, prompt):
-        with interrupt_context(self._check_interrupt, self._request_interrupt):
+        with use_display(self.display), interrupt_context(self._check_interrupt, self._request_interrupt):
             self.messages.append({"role": "user", "content": prompt})
             self._compact_tool_history()
             self._trim_history()
@@ -818,7 +818,7 @@ class Agent:
             image_data: Raw image bytes (e.g. from Telegram download).
             image_path: Path to an image file on disk.
         """
-        with interrupt_context(self._check_interrupt, self._request_interrupt):
+        with use_display(self.display), interrupt_context(self._check_interrupt, self._request_interrupt):
             if image_path:
                 path = Path(image_path)
                 if not path.exists():

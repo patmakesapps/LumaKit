@@ -27,6 +27,7 @@ from core import auth
 from core.chat_store import make_title, save_chat, set_active_chat
 from core.cli import Spinner, show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
 from core.display import DisplayHooks
+from core import email_draft_store
 from core.interface_context import set_interface
 from core.service import LumaKitService, Surface
 from core.telegram_api import (
@@ -196,7 +197,7 @@ def main():
     _DENY = {"no", "n", "nah", "skip", "cancel", "nope", "don't", "dont"}
 
     def _handle_pending_draft(text, chat_id):
-        draft = service.email.pending_draft
+        draft = email_draft_store.get_latest_pending()
         if not draft:
             return False
         if str(chat_id) != str(OWNER_ID):
@@ -204,16 +205,22 @@ def main():
         normalized = text.strip().lower()
         if normalized in _AFFIRM:
             from tools.comms.email import send_preapproved
-            result = send_preapproved(draft["to"], draft["subject"], draft["body"])
-            service.email.clear_pending_draft()
+            claimed = email_draft_store.pop_pending(draft["id"])
+            if not claimed:
+                send_message("That draft was already handled.", chat_id=chat_id)
+                return True
+            result = send_preapproved(claimed["to_addr"], claimed["subject"], claimed["body"])
             if result.get("sent"):
-                send_message(f"✅ Sent to {draft['from_label']}.", chat_id=chat_id)
+                send_message(f"✅ Sent to {claimed['from_label']}.", chat_id=chat_id)
             else:
                 send_message(f"❌ Couldn't send: {result.get('error', 'unknown error')}", chat_id=chat_id)
             return True
         if normalized in _DENY:
-            service.email.clear_pending_draft()
-            send_message("👍 Skipped. Draft discarded.", chat_id=chat_id)
+            claimed = email_draft_store.pop_pending(draft["id"])
+            if claimed:
+                send_message("👍 Skipped. Draft discarded.", chat_id=chat_id)
+            else:
+                send_message("That draft was already handled.", chat_id=chat_id)
             return True
         return False
 

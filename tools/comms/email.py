@@ -8,7 +8,7 @@ Safety layers (all outbound):
   1. Owner gate
   2. Codebase-leak scanner (scan_for_leaks)
   3. Rate limit (10/hour default, check_rate_limit)
-  4. Interactive confirmation (cli.confirm shows full draft on Telegram)
+  4. Interactive confirmation (surface-aware confirm UI)
   5. Signature applied automatically
   6. Audit log entry (.lumakit/sent_emails.log)
 
@@ -37,7 +37,8 @@ import ssl
 from email.message import EmailMessage
 from email.utils import parseaddr
 
-from core import auth, cli
+from core import auth
+from core.display import confirm_email as display_confirm_email
 from core.email_filter import (
     apply_signature,
     audit_log,
@@ -149,7 +150,16 @@ def _safe_send(cfg, msg_obj, to_display, subject, body):
     # 3. Apply signature BEFORE showing the draft, so owner sees what will actually send
     final_body = apply_signature(body)
 
-    # 4. Owner confirmation — shows full draft, owner says y/n on Telegram
+    preview = {
+        "action": "reply" if msg_obj.get("In-Reply-To") else "send",
+        "to": to_display,
+        "cc": msg_obj.get("Cc", ""),
+        "subject": subject,
+        "body": final_body,
+        "remaining_after_send": remaining - 1,
+    }
+
+    # 4. Owner confirmation — uses the active surface's confirmation UI
     prompt = (
         "Ready to send this email?\n"
         f"To: {to_display}\n"
@@ -159,7 +169,7 @@ def _safe_send(cfg, msg_obj, to_display, subject, body):
         "─────────\n"
         f"(Sends remaining this hour: {remaining - 1})"
     )
-    if not cli.confirm(prompt):
+    if not display_confirm_email(preview, prompt):
         audit_log(to_display, subject, final_body, approved=False, error="owner declined")
         return {"sent": False, "declined": True, "message": "Owner declined to send."}
 

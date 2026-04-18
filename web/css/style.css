@@ -406,6 +406,124 @@ body {
     box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
 }
 
+.message.assistant.email-card-message .bubble {
+    display: flex;
+    flex-direction: column;
+    max-width: min(100%, 620px);
+}
+
+.email-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(100%, 620px);
+    padding: 14px 16px;
+    border: 1px solid rgba(107, 63, 160, 0.38);
+    border-radius: 18px;
+    background:
+        radial-gradient(circle at top right, rgba(153, 118, 255, 0.14), transparent 34%),
+        linear-gradient(180deg, rgba(34, 26, 53, 0.96) 0%, rgba(24, 18, 36, 0.98) 100%);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.26);
+}
+
+.email-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.email-card-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(107, 63, 160, 0.18);
+    border: 1px solid rgba(153, 118, 255, 0.28);
+    color: var(--accent-light);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.email-card-subtitle {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.email-card-meta {
+    display: grid;
+    gap: 8px;
+}
+
+.email-card-row {
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    gap: 12px;
+    align-items: start;
+}
+
+.email-card-key {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.email-card-value {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.email-card-section {
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.email-card-section-title {
+    margin-bottom: 8px;
+    color: var(--accent-light);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.email-card-section-body {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.email-card-links {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text-secondary);
+}
+
+.email-card-link-item {
+    margin: 0 0 8px;
+}
+
+.email-card-link-url {
+    display: block;
+    color: var(--text-primary);
+    word-break: break-all;
+}
+
+.email-card-link-label {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
 .delivered-image-link {
     display: block;
     border-radius: 12px;
@@ -787,6 +905,40 @@ body {
 
 .confirm-card-status.approved { color: var(--success); }
 .confirm-card-status.denied { color: var(--text-muted); }
+
+.email-confirm-card {
+    max-width: 620px;
+}
+
+.email-confirm-card .email-card {
+    width: auto;
+    margin: 0 12px 12px;
+    box-shadow: none;
+}
+
+.email-draft-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.email-draft-status {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.email-draft-status.pending {
+    color: var(--accent-light);
+}
+
+.email-draft-status.approved {
+    color: var(--success);
+}
+
+.email-draft-status.denied {
+    color: var(--error);
+}
 
 /* ===== Right-side diff panel ===== */
 

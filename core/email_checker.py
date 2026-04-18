@@ -17,6 +17,7 @@ import threading
 from email.header import decode_header, make_header
 from email.utils import parseaddr
 
+from core import email_draft_store
 from core.email_filter import strip_urls
 
 
@@ -84,26 +85,25 @@ def _extract_body(msg):
 # --------- checker class ---------
 
 class EmailChecker:
-    def __init__(self, notify_owner, ask_llm, inject_session=None, interval=60):
+    def __init__(self, notify_owner, ask_llm, inject_session=None, log_notification=None, interval=60):
         """
-        notify_owner    — callable(text) to send a Telegram message to the owner
+        notify_owner    — callable(text, meta=None, notification_id=None) to send
+                          a message to the owner surface
         ask_llm         — callable(prompt) returning the LLM's text response
         inject_session  — optional callable(text) that appends an assistant message
                           to the owner's agent session
+        log_notification — optional callable(text, meta=None) -> row_id for the
+                          shared notification log
         interval        — seconds between polls (default 60)
         """
         self._notify = notify_owner
         self._ask_llm = ask_llm
         self._inject = inject_session
+        self._log_notification = log_notification
         self._interval = interval
         self._stop = threading.Event()
         self._thread = None
         self._last_uid = 0
-        # Pending drafts: list of {to, subject, body, from_label, uid} dicts —
-        # appended when the LLM drafts a reply. Bridge intercepts owner's "yes/no"
-        # to send or discard the most recently presented draft. Using a list so
-        # multiple drafts from simultaneous emails don't overwrite each other.
-        self.pending_drafts = []
 
     def _fetch_new_messages(self):
         """Return list of parsed message dicts newer than last_uid."""
@@ -260,19 +260,42 @@ class EmailChecker:
     def _handle_message(self, msg):
         llm_text = self._ask_llm_about_email(msg)
         summary, draft = self._split_summary_and_draft(llm_text)
+        sender = (
+            f"{msg['from_name']} <{msg['from_addr']}>".strip()
+            if msg["from_name"]
+            else msg["from_addr"]
+        )
+        meta = {
+            "kind": "email",
+            "email": {
+                "from": sender,
+                "subject": msg["subject"] or "(no subject)",
+                "body_preview": (msg["body"] or "")[:1200],
+                "summary": (summary or "")[:1200],
+                "draft_preview": (draft or "")[:1200],
+                "links": [
+                    {"url": url, "label": label}
+                    for url, label in msg["links"][:10]
+                ],
+            },
+        }
 
         # If we got a draft, append it as pending so the owner can one-shot approve
         if draft and msg["from_addr"]:
-            self.pending_drafts.append({
-                "to": msg["from_addr"],
-                "subject": msg["subject"] if msg["subject"].lower().startswith("re:") else f"Re: {msg['subject'] or '(no subject)'}",
-                "body": draft,
-                "from_label": msg["from_name"] or msg["from_addr"],
-                "uid": msg["uid"],
-            })
+            draft_id = email_draft_store.add_pending(
+                to_addr=msg["from_addr"],
+                subject=msg["subject"] if msg["subject"].lower().startswith("re:") else f"Re: {msg['subject'] or '(no subject)'}",
+                body=draft,
+                from_label=msg["from_name"] or msg["from_addr"],
+                uid=msg["uid"],
+            )
+            meta["draft_id"] = draft_id
 
         notification = self._format_notification(msg, summary, draft)
-        self._notify(notification)
+        notification_id = None
+        if self._log_notification:
+            notification_id = self._log_notification(notification, meta=meta)
+        self._notify(notification, meta=meta, notification_id=notification_id)
         print(f"[email] notified owner about: {msg['subject'] or '(no subject)'}" + (" [draft pending]" if draft else ""))
 
         # Inject into owner's session so "reply to that" works if they don't just say yes/no
@@ -297,13 +320,12 @@ class EmailChecker:
 
     def clear_pending_draft(self):
         """Remove the most recently presented pending draft."""
-        if self.pending_drafts:
-            self.pending_drafts.pop()
+        return email_draft_store.pop_latest_pending()
 
     @property
     def pending_draft(self):
         """Backward-compatible property: returns the most recent pending draft, or None."""
-        return self.pending_drafts[-1] if self.pending_drafts else None
+        return email_draft_store.get_latest_pending()
 
     def _pulse(self):
         while not self._stop.is_set():

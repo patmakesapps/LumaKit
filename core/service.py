@@ -157,7 +157,7 @@ class LumaKitService:
             label = "Family reminder" if reminder.get("chat_id") is None else "Reminder"
             # Log first so a missed ping is recoverable on whichever surface
             # the user opens next.
-            notifications.log(
+            notification_id = notifications.log(
                 content=reminder["content"],
                 label=label,
                 user_id=reminder.get("chat_id"),
@@ -167,6 +167,7 @@ class LumaKitService:
                 "label": label,
                 "chat_id": reminder.get("chat_id"),
                 "target": target,
+                "notification_id": notification_id,
             })
 
         self._reminders = ReminderChecker(interval=self._reminder_interval, notify=on_reminder)
@@ -203,10 +204,29 @@ class LumaKitService:
             )
             return response.get("message", {}).get("content", "").strip()
 
+        def log_email_notification(msg, meta=None):
+            return notifications.log(
+                content=msg,
+                label="",
+                user_id=auth.get_owner(),
+                meta=meta,
+            )
+
+        def on_email_notification(msg, meta=None, notification_id=None):
+            return self.router.route({
+                "content": msg,
+                "label": "",
+                "chat_id": auth.get_owner(),
+                "target": "auto",
+                "notification_id": notification_id,
+                "meta": meta or {},
+            })
+
         self._email = EmailChecker(
-            notify_owner=lambda msg: self.router.notify_owner(msg),
+            notify_owner=on_email_notification,
             ask_llm=email_ask_llm,
             inject_session=self.router.inject_owner_session,
+            log_notification=log_email_notification,
             interval=self._email_interval,
         )
         self._email.start()
