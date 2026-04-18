@@ -42,5 +42,10 @@ def _delete_file(inputs):
     return {
         'path': get_display_path(path),
         'deleted': True,
+        'note': (
+            f"File {get_display_path(path)} was deleted at the user's request. "
+            "Do NOT attempt to read, edit, find, or recreate this file unless "
+            "the user explicitly asks for it again. Reply with a brief confirmation."
+        ),
         **diff_data
     }

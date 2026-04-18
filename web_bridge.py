@@ -156,6 +156,31 @@ def _tool_detail(tool_name: str, inputs: dict) -> str:
     return ""
 
 
+def _tool_status(tool_name: str, inputs: dict) -> str:
+    """Telegram-style narration for what Lumi is currently doing."""
+    verbs = {
+        "read_file": "Reading",
+        "edit_file": "Editing",
+        "write_file": "Writing",
+        "delete_file": "Deleting",
+        "list_directory": "Listing",
+        "search_files": "Searching",
+        "grep_search": "Searching",
+        "execute_shell": "Running",
+        "execute_python": "Running Python",
+        "web_search": "Searching the web",
+        "fetch_url": "Fetching",
+        "save_memory": "Saving memory",
+        "save_task": "Saving task",
+        "move_path": "Moving",
+    }
+    verb = verbs.get(tool_name, tool_name.replace("_", " "))
+    target = _tool_detail(tool_name, inputs)
+    if target:
+        return f"Lumi is {verb.lower()} {target}..."
+    return f"Lumi is using {verb.lower()}..."
+
+
 def _make_agent(ws_id: int, send_fn):
     """Create an Agent wired to push status/tool events over WebSocket."""
 
@@ -184,6 +209,8 @@ def _make_agent(ws_id: int, send_fn):
             "name": tool_name,
             "detail": _ws_tool_ctx[ws_id]["detail"],
         })
+        # Telegram-style narration so the user sees what Lumi is doing
+        send_fn({"type": "status", "text": _tool_status(tool_name, inputs)})
 
     def ws_show_tool_result(result):
         if not result.get("success"):
@@ -274,9 +301,34 @@ async def websocket_chat(ws: WebSocket):
     _ws_confirm_events[ws_id] = threading.Event()
 
     # Session state
-    chat_id = new_chat_id()
-    title = ""
-    first_message_sent = False
+    session = {"chat_id": new_chat_id(), "title": "", "first_message_sent": False}
+
+    async def run_agent_request(text: str):
+        """Run the agent in a worker thread and emit the response when it finishes.
+        This is fired as a separate task so the receive loop stays alive and can
+        process confirm_response / stop messages while the agent is working."""
+        try:
+            response = await loop.run_in_executor(None, agent.ask_llm, text)
+            reply = response.get("message", {}).get("content", "")
+            if not session["first_message_sent"]:
+                session["title"] = make_title(text)
+                session["first_message_sent"] = True
+            save_chat(session["chat_id"], session["title"], agent.messages)
+            if not ws_closed["v"]:
+                await ws.send_json({
+                    "type": "response",
+                    "text": reply,
+                    "chat_id": session["chat_id"],
+                    "title": session["title"],
+                })
+        except Exception as e:
+            if not ws_closed["v"]:
+                try:
+                    await ws.send_json({"type": "error", "text": f"Error: {e}"})
+                except Exception:
+                    pass
+
+    agent_task: asyncio.Task | None = None
 
     try:
         while True:
@@ -297,39 +349,39 @@ async def websocket_chat(ws: WebSocket):
                     event.set()
                 continue
 
-            # Client wants to stop the current run
+            # Explicit stop button (legacy — UI now uses /stop instead)
             if msg_type == "stop":
                 agent.interrupt_requested = True
                 continue
 
-            # Client wants to load a specific chat
+            # Load a specific chat
             if msg_type == "load_chat":
                 target_id = data.get("chat_id", "")
                 loaded = load_chat(target_id)
                 if loaded:
-                    chat_id = loaded["id"]
-                    title = loaded["title"]
-                    first_message_sent = True
+                    session["chat_id"] = loaded["id"]
+                    session["title"] = loaded["title"]
+                    session["first_message_sent"] = True
                     agent.messages = loaded["messages"]
                     await ws.send_json({
                         "type": "chat_loaded",
-                        "chat_id": chat_id,
-                        "title": title,
+                        "chat_id": session["chat_id"],
+                        "title": session["title"],
                         "messages": loaded["messages"],
                     })
                 else:
                     await ws.send_json({"type": "error", "text": "Chat not found"})
                 continue
 
-            # Client wants a new chat
+            # New chat
             if msg_type == "new_chat":
-                chat_id = new_chat_id()
-                title = ""
-                first_message_sent = False
+                session["chat_id"] = new_chat_id()
+                session["title"] = ""
+                session["first_message_sent"] = False
                 agent.messages = [agent.build_system_message()]
                 await ws.send_json({
                     "type": "chat_loaded",
-                    "chat_id": chat_id,
+                    "chat_id": session["chat_id"],
                     "title": "",
                     "messages": [],
                 })
@@ -341,43 +393,32 @@ async def websocket_chat(ws: WebSocket):
                 if not text:
                     continue
 
+                # Telegram-style /stop: interrupt the current run
+                if text.lower() in ("/stop", "stop"):
+                    agent.interrupt_requested = True
+                    # Unblock any pending confirm so the thread can wind down
+                    ev = _ws_confirm_events.get(ws_id)
+                    if ev and not ev.is_set():
+                        _ws_confirm_results[ws_id] = False
+                        ev.set()
+                    await ws.send_json({"type": "status", "text": "Stopping..."})
+                    continue
+
                 await ws.send_json({"type": "status", "text": "Lumi is thinking..."})
 
-                # Run the blocking agent call in a thread
-                def run_agent(prompt):
-                    return agent.ask_llm(prompt)
-
-                try:
-                    response = await loop.run_in_executor(None, run_agent, text)
-                    reply = response.get("message", {}).get("content", "")
-
-                    if not first_message_sent:
-                        title = make_title(text)
-                        first_message_sent = True
-
-                    save_chat(chat_id, title, agent.messages)
-
-                    if not ws_closed["v"]:
-                        await ws.send_json({
-                            "type": "response",
-                            "text": reply,
-                            "chat_id": chat_id,
-                            "title": title,
-                        })
-                except Exception as e:
-                    if not ws_closed["v"]:
-                        try:
-                            await ws.send_json({
-                                "type": "error",
-                                "text": f"Error: {e}",
-                            })
-                        except Exception:
-                            pass
+                # Spawn as a task so the receive loop keeps running — this is
+                # what lets confirm_response / stop messages get processed while
+                # the agent is working.
+                agent_task = asyncio.create_task(run_agent_request(text))
+                continue
 
     except WebSocketDisconnect:
         pass
     finally:
         ws_closed["v"] = True
+        # Cancel any in-flight agent task
+        if agent_task and not agent_task.done():
+            agent.interrupt_requested = True
         # If the agent is blocked on a confirm, unblock it so the thread can exit
         ev = _ws_confirm_events.get(ws_id)
         if ev:

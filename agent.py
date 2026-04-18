@@ -535,7 +535,7 @@ class Agent:
                         "success": True,
                         "data": {
                             "skipped": True,
-                            "reason": "The user declined this change. Do NOT retry. Move on and respond with what you know.",
+                            "reason": "The user declined this change. STOP the current task completely. Do NOT retry with the same tool, a different tool, a different path, or any workaround. Do NOT search for, re-check, or recreate related files. Reply with a short acknowledgement only.",
                         },
                     }
             else:
@@ -545,7 +545,7 @@ class Agent:
                         "success": True,
                         "data": {
                             "skipped": True,
-                            "reason": "The user declined this change. Do NOT retry. Move on and respond with what you know.",
+                            "reason": "The user declined this change. STOP the current task completely. Do NOT retry with the same tool, a different tool, a different path, or any workaround. Do NOT search for, re-check, or recreate related files. Reply with a short acknowledgement only.",
                         },
                     }
 
@@ -564,7 +564,7 @@ class Agent:
                 "success": True,
                 "data": {
                     "skipped": True,
-                    "reason": "The user declined this action. Do NOT retry or attempt alternatives. Move on and respond with what you know.",
+                    "reason": "The user declined this action. STOP the current task completely. Do NOT retry or attempt alternatives with different tools or arguments. Reply with a short acknowledgement only.",
                 },
             }
         return self.execute_tool(tool_name, tool_inputs)

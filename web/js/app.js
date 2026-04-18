@@ -11,7 +11,6 @@ const $messagesInner = document.getElementById('messages-inner');
 const $emptyState = document.getElementById('empty-state');
 const $input = document.getElementById('input');
 const $sendBtn = document.getElementById('send-btn');
-const $stopBtn = document.getElementById('stop-btn');
 const $chatList = document.getElementById('chat-list');
 const $newChatBtn = document.getElementById('new-chat-btn');
 const $topbarTitle = document.getElementById('topbar-title');
@@ -74,8 +73,7 @@ function scrollToBottom() {
 
 function setWorking(working) {
     isWorking = working;
-    $sendBtn.classList.toggle('hidden', working);
-    $stopBtn.classList.toggle('hidden', !working);
+    // Type /stop to interrupt — no UI toggle needed
 }
 
 function removeStatus() {
@@ -487,13 +485,6 @@ $input.addEventListener('input', () => {
     $input.style.height = 'auto';
     $input.style.height = Math.min($input.scrollHeight, 200) + 'px';
 });
-
-// Stop button
-$stopBtn.onclick = () => {
-    ws.send({ type: 'stop' });
-    setWorking(false);
-    removeStatus();
-};
 
 // New chat
 $newChatBtn.onclick = () => {
