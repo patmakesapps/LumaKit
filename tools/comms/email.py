@@ -188,8 +188,8 @@ def get_email_send_tool():
     return {
         "name": "email_send",
         "description": (
-            "Sends an email from Lumi's email account. Owner-only. "
-            "Requires owner approval via Telegram before sending. "
+            "Sends an email from Lumi's email account. "
+            "Requires approval before sending. "
             "Never include source code, file paths, or internal details in the body."
         ),
         "inputSchema": {
@@ -233,7 +233,7 @@ def _email_send(inputs):
 def get_email_check_inbox_tool():
     return {
         "name": "email_check_inbox",
-        "description": "Lists recent emails (metadata only — no body or URLs). Owner-only.",
+        "description": "Lists recent emails (metadata only — no body or URLs).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -299,8 +299,7 @@ def get_email_read_tool():
         "name": "email_read",
         "description": (
             "Reads the body of an email by id. All URLs are stripped before return — "
-            "you will only see [link] placeholders. Do not ask the owner for the URL. "
-            "Owner-only."
+            "you will only see [link] placeholders. Do not ask for the URL."
         ),
         "inputSchema": {
             "type": "object",
@@ -401,8 +400,8 @@ def get_email_reply_tool():
     return {
         "name": "email_reply",
         "description": (
-            "Replies to an email by id. Owner-only. "
-            "Requires owner approval via Telegram before sending. "
+            "Replies to an email by id. "
+            "Requires approval before sending. "
             "Never include source code, file paths, or internal details."
         ),
         "inputSchema": {

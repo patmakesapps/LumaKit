@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from agent import Agent
+from core import auth as _auth
 from core.chat_store import (
     delete_chat,
     list_chats,
@@ -295,6 +296,8 @@ async def websocket_chat(ws: WebSocket):
         except Exception:
             pass
 
+    _auth.set_active_user("web_owner")
+
     agent = _make_agent(ws_id, send_sync)
     # If the client disconnects, abort the agent loop at the next check
     agent.check_interrupt = lambda: ws_closed["v"]
@@ -434,6 +437,8 @@ async def websocket_chat(ws: WebSocket):
 # ---------------------------------------------------------------------------
 
 def main():
+    _auth.set_owner("web_owner")
+
     print(f"\n=== LumaKit Web UI ===")
     print(f"Open http://localhost:{PORT} in your browser\n")
 
