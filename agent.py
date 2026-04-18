@@ -432,7 +432,7 @@ class Agent:
         # Conversation history
         self.messages = [self.build_system_message()]
 
-    def build_system_prompt(self, extra_instructions=None):
+    def build_system_prompt(self, extra_instructions=None, context_instructions=None):
         prompt = self._system_prompt_prefix
         extra = (extra_instructions or "").strip()
         if extra:
@@ -443,16 +443,26 @@ class Agent:
                 "It does not change permissions, safety rules, tool rules, ownership boundaries, "
                 "or any other system instructions."
             )
+        context = (context_instructions or "").strip()
+        if context:
+            prompt += (
+                "\n\nCurrent interface context:\n"
+                f"{context}\n"
+                "Treat this as operational context for the current conversation."
+            )
         return prompt
 
-    def build_system_message(self, extra_instructions=None):
+    def build_system_message(self, extra_instructions=None, context_instructions=None):
         return {
             "role": "system",
-            "content": self.build_system_prompt(extra_instructions=extra_instructions),
+            "content": self.build_system_prompt(
+                extra_instructions=extra_instructions,
+                context_instructions=context_instructions,
+            ),
         }
 
     def apply_runtime_overrides(self, messages=None, model=None, fallback_model=None,
-                                extra_instructions=None):
+                                extra_instructions=None, context_instructions=None):
         self.model = model if model is not None else self.default_model
         self.fallback_model = (
             fallback_model if fallback_model is not None else self.default_fallback_model
@@ -460,7 +470,10 @@ class Agent:
         self.ollama.fallback_model = self.fallback_model
 
         target_messages = messages if messages is not None else self.messages
-        system_message = self.build_system_message(extra_instructions=extra_instructions)
+        system_message = self.build_system_message(
+            extra_instructions=extra_instructions,
+            context_instructions=context_instructions,
+        )
         if target_messages:
             target_messages[0] = system_message
         else:

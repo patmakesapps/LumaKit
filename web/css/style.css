@@ -394,6 +394,40 @@ body {
     font-size: 15px;
 }
 
+.message.assistant.image-message .bubble {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: min(100%, 560px);
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(34, 26, 53, 0.95) 0%, rgba(26, 20, 40, 0.98) 100%);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+}
+
+.delivered-image-link {
+    display: block;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #120e1e;
+    border: 1px solid var(--border-subtle);
+}
+
+.delivered-image {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: min(70vh, 520px);
+    object-fit: contain;
+}
+
+.delivered-image-caption {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
 /* ===== Markdown typography ===== */
 
 .bubble p { margin: 0.5em 0; }

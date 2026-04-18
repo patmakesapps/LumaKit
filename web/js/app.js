@@ -39,7 +39,7 @@ let currentChatId = null;
 let statusEl = null;
 // Pending confirm card awaiting a decision (only one at a time)
 let pendingConfirm = null;
-let currentTurnHadReaction = false;
+let currentTurnHadRichReply = false;
 
 // --- Markdown setup ---
 if (window.marked) {
@@ -140,18 +140,82 @@ function addReactionToLatestUserMessage(emoji) {
     scrollToBottom();
 }
 
-function restoreReactionFromToolMessage(content) {
-    if (!content) return false;
+function addDeliveredImage(url, caption = '') {
+    if (!url) return;
+    if ($emptyState && !$emptyState.classList.contains('hidden')) {
+        $emptyState.classList.add('hidden');
+        exitCenteredMode();
+    }
+    removeStatus();
+
+    const div = document.createElement('div');
+    div.className = 'message assistant image-message';
+    div.dataset.role = 'assistant';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+
+    const link = document.createElement('a');
+    link.className = 'delivered-image-link';
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noreferrer noopener';
+
+    const image = document.createElement('img');
+    image.className = 'delivered-image';
+    image.src = url;
+    image.alt = caption || 'Delivered image';
+    image.loading = 'lazy';
+
+    link.appendChild(image);
+    bubble.appendChild(link);
+
+    if (caption) {
+        const captionEl = document.createElement('div');
+        captionEl.className = 'delivered-image-caption';
+        captionEl.textContent = caption;
+        bubble.appendChild(captionEl);
+    }
+
+    div.appendChild(bubble);
+    $messagesInner.appendChild(div);
+    scrollToBottom();
+}
+
+function parseToolMessageContent(content) {
+    if (!content) return null;
 
     try {
-        const parsed = JSON.parse(content);
-        const data = parsed?.data || {};
-        if (!data.reacted || !data.emoji) return false;
+        return JSON.parse(content);
+    } catch {
+        return null;
+    }
+}
+
+function restoreRichToolMessage(message) {
+    const parsed = parseToolMessageContent(message?.content);
+    const data = parsed?.data || {};
+
+    if (message?.name === 'react_to_message' && data.reacted && data.emoji) {
         addReactionToLatestUserMessage(data.emoji);
         return true;
-    } catch {
-        return false;
     }
+
+    if (
+        ['send_photo_user', 'screenshot_user'].includes(message?.name) &&
+        data.sent &&
+        data.interface === 'web' &&
+        data.url
+    ) {
+        addDeliveredImage(data.url, data.caption || '');
+        return true;
+    }
+
+    return false;
+}
+
+function isInlineToolResult(data) {
+    return !data.error && ['react_to_message', 'send_photo_user', 'screenshot_user'].includes(data.name);
 }
 
 function addToolCard(name, detail, isResult = false, isError = false) {
@@ -183,7 +247,7 @@ function clearMessages() {
     $messagesInner.innerHTML = '';
     $emptyState.classList.remove('hidden');
     enterCenteredMode();
-    currentTurnHadReaction = false;
+    currentTurnHadRichReply = false;
 }
 
 // --- Views ---
@@ -300,12 +364,12 @@ const ws = new WS({
         const text = (data.text || '').trim();
         if (text) {
             addMessage('assistant', text);
-        } else if (!currentTurnHadReaction) {
+        } else if (!currentTurnHadRichReply) {
             // Agent finished but produced no text — surface a subtle marker so
             // the UI doesn't look frozen after a tool-only round.
             addMessage('assistant', '_Done._');
         }
-        currentTurnHadReaction = false;
+        currentTurnHadRichReply = false;
 
         if (data.title) {
             $topbarTitle.textContent = data.title;
@@ -323,20 +387,25 @@ const ws = new WS({
     },
 
     tool_result(data) {
-        if (data.name === 'react_to_message' && !data.error) return;
-        const isError = data.summary?.includes('error') || false;
+        if (isInlineToolResult(data)) return;
+        const isError = Boolean(data.error);
         addToolCard('', data.summary, true, isError);
     },
 
     reaction(data) {
         addReactionToLatestUserMessage(data.emoji);
-        currentTurnHadReaction = true;
+        currentTurnHadRichReply = true;
+    },
+
+    image(data) {
+        addDeliveredImage(data.url, data.caption || '');
+        currentTurnHadRichReply = true;
     },
 
     error(data) {
         setWorking(false);
         removeStatus();
-        currentTurnHadReaction = false;
+        currentTurnHadRichReply = false;
         addMessage('assistant', `Error: ${data.text}`);
     },
 
@@ -355,9 +424,7 @@ const ws = new WS({
         for (const msg of data.messages || []) {
             if (msg.role === 'system') continue;
             if (msg.role === 'tool') {
-                if (msg.name === 'react_to_message') {
-                    restoreReactionFromToolMessage(msg.content);
-                }
+                restoreRichToolMessage(msg);
                 continue;
             }
             if (msg.role === 'user' || msg.role === 'assistant') {
@@ -515,7 +582,7 @@ function sendMessage() {
     const text = $input.value.trim();
     if (!text) return;
 
-    currentTurnHadReaction = false;
+    currentTurnHadRichReply = false;
     addMessage('user', text);
     ws.send({ type: 'message', text });
     $input.value = '';

@@ -28,6 +28,7 @@ from core.chat_store import make_title, save_chat
 from core.cli import Spinner
 from core.email_checker import EmailChecker
 from core.heartbeat import Heartbeat
+from core.interface_context import set_interface
 from core.reminder_checker import ReminderChecker
 from core.runtime_config import get_owner_effective_config
 from core.task_runner import TaskRunner
@@ -338,6 +339,7 @@ def main():
                 set_react_context(chat_id, message_id)
                 set_active_user(chat_id)
                 auth.set_active_user(chat_id)
+                set_interface("telegram", chat_id)
                 heartbeat.notify_activity()
 
                 session = _get_session(chat_id)

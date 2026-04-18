@@ -49,7 +49,7 @@ def resume_chat(chat_id_str, agent, session):
 
 def apply_chat_runtime(agent, session, chat_id):
     """Switch agent runtime config for the active Telegram user."""
-    apply_user_runtime(agent, session, chat_id)
+    apply_user_runtime(agent, session, chat_id, surface="telegram")
 
 
 # ---------------------------------------------------------------------------

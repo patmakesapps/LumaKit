@@ -38,6 +38,7 @@ from core.chat_store import (
     save_chat,
 )
 from core.cli import Spinner
+from core.interface_context import set_interface
 from core.paths import get_data_dir
 from core.runtime_config import apply_user_runtime
 from core.telegram_state import OWNER_ID
@@ -52,6 +53,7 @@ Spinner.stop = lambda self: None
 PORT = int(os.getenv("LUMAKIT_WEB_PORT", "7865"))
 WEB_DIR = Path(__file__).resolve().parent / "web"
 WEB_USER_ID = str(OWNER_ID) if OWNER_ID else "web_owner"
+WEB_MEDIA_DIR = get_data_dir() / "web_media"
 
 app = FastAPI(title="LumaKit")
 
@@ -72,6 +74,9 @@ app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 PHOTOS_DIR = Path(__file__).resolve().parent / "photos"
 if PHOTOS_DIR.exists():
     app.mount("/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
+
+WEB_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(WEB_MEDIA_DIR)), name="media")
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +197,9 @@ def _prepare_web_turn(agent: Agent, session: dict):
     _auth.set_active_user(WEB_USER_ID)
     set_memory_active_user(WEB_USER_ID)
     set_react_context(None, None)
+    set_interface("web", WEB_USER_ID)
     session["messages"] = agent.messages
-    apply_user_runtime(agent, session, WEB_USER_ID)
+    apply_user_runtime(agent, session, WEB_USER_ID, surface="web")
 
 
 def _make_agent(ws_id: int, send_fn):
@@ -245,6 +251,20 @@ def _make_agent(ws_id: int, send_fn):
                 send_fn({
                     "type": "reaction",
                     "emoji": data["emoji"],
+                })
+                _ws_tool_ctx.pop(ws_id, None)
+                send_fn({"type": "status", "text": "Lumi is working..."})
+                return
+            if (
+                tool_name in {"send_photo_user", "screenshot_user"}
+                and data.get("sent")
+                and data.get("interface") == "web"
+                and data.get("url")
+            ):
+                send_fn({
+                    "type": "image",
+                    "url": data["url"],
+                    "caption": data.get("caption", ""),
                 })
                 _ws_tool_ctx.pop(ws_id, None)
                 send_fn({"type": "status", "text": "Lumi is working..."})
