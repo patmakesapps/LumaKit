@@ -219,6 +219,8 @@ def _make_agent(ws_id: int, send_fn):
             "path": inputs.get("path") or inputs.get("source_path"),
             "diff": None,
         }
+        if tool_name == "react_to_message":
+            return
         send_fn({
             "type": "tool_call",
             "name": tool_name,
@@ -228,11 +230,25 @@ def _make_agent(ws_id: int, send_fn):
         send_fn({"type": "status", "text": _tool_status(tool_name, inputs)})
 
     def ws_show_tool_result(result):
+        ctx = _ws_tool_ctx.get(ws_id) or {}
+        tool_name = ctx.get("tool_name", "")
         if not result.get("success"):
             summary = result.get("error", "unknown error")
             is_error = True
         else:
             data = result.get("data", {})
+            if (
+                tool_name == "react_to_message"
+                and data.get("reacted")
+                and data.get("emoji")
+            ):
+                send_fn({
+                    "type": "reaction",
+                    "emoji": data["emoji"],
+                })
+                _ws_tool_ctx.pop(ws_id, None)
+                send_fn({"type": "status", "text": "Lumi is working..."})
+                return
             if data.get("skipped"):
                 summary = "skipped"
             elif "count" in data:
@@ -242,7 +258,7 @@ def _make_agent(ws_id: int, send_fn):
             is_error = False
         send_fn({
             "type": "tool_result",
-            "name": "",
+            "name": tool_name,
             "summary": summary,
             "error": is_error,
         })

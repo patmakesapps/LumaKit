@@ -350,7 +350,8 @@ body {
 /* User messages — right-aligned pill bubble */
 .message.user {
     display: flex;
-    justify-content: flex-end;
+    flex-direction: column;
+    align-items: flex-end;
 }
 
 .message.user .bubble {
@@ -361,6 +362,23 @@ body {
     border-bottom-right-radius: 6px;
     max-width: 75%;
     font-size: 15px;
+}
+
+.message-reaction {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 24px;
+    margin-top: 6px;
+    margin-right: 12px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+    font-size: 14px;
+    line-height: 1;
 }
 
 /* Assistant messages — no bubble, clean text */

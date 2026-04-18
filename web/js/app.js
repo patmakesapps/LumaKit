@@ -39,6 +39,7 @@ let currentChatId = null;
 let statusEl = null;
 // Pending confirm card awaiting a decision (only one at a time)
 let pendingConfirm = null;
+let currentTurnHadReaction = false;
 
 // --- Markdown setup ---
 if (window.marked) {
@@ -102,6 +103,7 @@ function addMessage(role, content) {
 
     const div = document.createElement('div');
     div.className = `message ${role}`;
+    div.dataset.role = role;
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
@@ -114,6 +116,41 @@ function addMessage(role, content) {
     // Highlight code blocks
     if (window.hljs) {
         div.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+    }
+}
+
+function getLastUserMessage() {
+    const messages = $messagesInner.querySelectorAll('.message.user');
+    return messages.length ? messages[messages.length - 1] : null;
+}
+
+function addReactionToLatestUserMessage(emoji) {
+    if (!emoji) return;
+    const message = getLastUserMessage();
+    if (!message) return;
+
+    let reaction = message.querySelector('.message-reaction');
+    if (!reaction) {
+        reaction = document.createElement('div');
+        reaction.className = 'message-reaction';
+        message.appendChild(reaction);
+    }
+
+    reaction.textContent = emoji;
+    scrollToBottom();
+}
+
+function restoreReactionFromToolMessage(content) {
+    if (!content) return false;
+
+    try {
+        const parsed = JSON.parse(content);
+        const data = parsed?.data || {};
+        if (!data.reacted || !data.emoji) return false;
+        addReactionToLatestUserMessage(data.emoji);
+        return true;
+    } catch {
+        return false;
     }
 }
 
@@ -146,6 +183,7 @@ function clearMessages() {
     $messagesInner.innerHTML = '';
     $emptyState.classList.remove('hidden');
     enterCenteredMode();
+    currentTurnHadReaction = false;
 }
 
 // --- Views ---
@@ -262,11 +300,12 @@ const ws = new WS({
         const text = (data.text || '').trim();
         if (text) {
             addMessage('assistant', text);
-        } else {
+        } else if (!currentTurnHadReaction) {
             // Agent finished but produced no text — surface a subtle marker so
             // the UI doesn't look frozen after a tool-only round.
             addMessage('assistant', '_Done._');
         }
+        currentTurnHadReaction = false;
 
         if (data.title) {
             $topbarTitle.textContent = data.title;
@@ -284,13 +323,20 @@ const ws = new WS({
     },
 
     tool_result(data) {
+        if (data.name === 'react_to_message' && !data.error) return;
         const isError = data.summary?.includes('error') || false;
         addToolCard('', data.summary, true, isError);
+    },
+
+    reaction(data) {
+        addReactionToLatestUserMessage(data.emoji);
+        currentTurnHadReaction = true;
     },
 
     error(data) {
         setWorking(false);
         removeStatus();
+        currentTurnHadReaction = false;
         addMessage('assistant', `Error: ${data.text}`);
     },
 
@@ -308,7 +354,12 @@ const ws = new WS({
 
         for (const msg of data.messages || []) {
             if (msg.role === 'system') continue;
-            if (msg.role === 'tool') continue;
+            if (msg.role === 'tool') {
+                if (msg.name === 'react_to_message') {
+                    restoreReactionFromToolMessage(msg.content);
+                }
+                continue;
+            }
             if (msg.role === 'user' || msg.role === 'assistant') {
                 const content = msg.content || '';
                 if (content) addMessage(msg.role, content);
@@ -464,6 +515,7 @@ function sendMessage() {
     const text = $input.value.trim();
     if (!text) return;
 
+    currentTurnHadReaction = false;
     addMessage('user', text);
     ws.send({ type: 'message', text });
     $input.value = '';
