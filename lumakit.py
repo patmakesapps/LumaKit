@@ -316,6 +316,15 @@ def _ps_quote(value: str) -> str:
     return value.replace("'", "''")
 
 
+def _windows_shell_candidates() -> list[list[str]]:
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    return [
+        [str(system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")],
+        ["powershell.exe"],
+        ["pwsh.exe"],
+    ]
+
+
 def _ensure_windows_icon(source_png: Path) -> Path:
     icon_target = get_data_dir() / "lumakit.ico"
     if icon_target.exists() and icon_target.stat().st_mtime >= source_png.stat().st_mtime:
@@ -342,14 +351,28 @@ def _create_windows_shortcut(*, target: Path, python_executable: Path, working_d
             "$Shortcut.Save()",
         ]
     )
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    if result.stderr.strip():
-        raise RuntimeError(result.stderr.strip())
+    errors = []
+    for shell_cmd in _windows_shell_candidates():
+        try:
+            result = subprocess.run(
+                [*shell_cmd, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            if result.stderr.strip():
+                raise RuntimeError(result.stderr.strip())
+            return
+        except FileNotFoundError as exc:
+            errors.append(f"{shell_cmd[0]}: {exc}")
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            detail = stderr or stdout or str(exc)
+            errors.append(f"{shell_cmd[0]}: {detail}")
+        except Exception as exc:
+            errors.append(f"{shell_cmd[0]}: {exc}")
+    raise RuntimeError(" ; ".join(errors))
 
 
 def _write_windows_cmd_shortcut(*, target: Path, python_executable: Path, working_dir: Path) -> None:
