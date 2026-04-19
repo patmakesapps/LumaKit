@@ -69,6 +69,8 @@ If a tool seems inconsistent, try a stronger model before assuming the tool is b
 - `ffmpeg` if you plan to work with Telegram audio regularly
 - For Telegram speech: a local `whisper.cpp` build plus `edge-tts` installed in the same Python environment
 
+Supported platforms: Linux, macOS, Windows. On Windows, use `py` instead of `python3` in the commands below (e.g. `py -m lumakit serve`).
+
 Install dependencies:
 
 ```bash
@@ -95,7 +97,7 @@ Copy `.env.example` to `.env` and set the values you want to use.
 | `OLLAMA_MODEL` | Primary model for chat requests |
 | `OLLAMA_FALLBACK_MODEL` | Fallback model if primary is unavailable |
 | `OLLAMA_LOCAL_MODEL` | Optional local model the Telegram owner can switch to with `/model local on` |
-| `LUMAKIT_WEB_PORT` | Optional — port for the local web UI, default `7865` |
+| `LUMAKIT_WEB_PORT` | Optional — port for the local web UI, default `7865`. If taken, the launcher walks forward to the next free port automatically. |
 | `SERPAPI_KEY` | Optional — enables premium web search |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather (for Telegram bridge) |
 | `TELEGRAM_ALLOWED_IDS` | Comma-separated Telegram chat IDs (first = owner/admin) |
@@ -328,3 +330,11 @@ Tools are auto-registered from `tools/**/*.py`. To add a new tool, follow the gu
 - Prefer short-lived branches such as `feat/add-web-tool` or `fix/tool-registry-validation`
 - Keep `main` stable and merge completed work back into `main`
 - If your branch gets behind, merge `main` into your branch instead of rebasing
+
+## Troubleshooting
+
+**Web UI won't load on Windows / "ERR_INVALID_HTTP_RESPONSE"**
+Another process is squatting the default port (a common culprit is `NTKDaemon` from Nahimic audio on MSI/Realtek laptops). As of the latest release, `lumakit serve` detects this and falls back to the next free port automatically — watch for a line like `Port 7865 is in use — falling back to 7866` at startup, and note the URL in the "Web UI:" line that follows. To pin a specific port, set `LUMAKIT_WEB_PORT` in `.env` or `~/.lumakit/config.env`.
+
+**`lumakit status` says `unhealthy`**
+A process is alive but the web server didn't bind. Run `lumakit stop` to clear the stale runtime state, then `lumakit serve` and check the startup output for errors.

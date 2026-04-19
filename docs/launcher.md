@@ -5,6 +5,8 @@ LumaKit now has a unified launcher. These are the commands users should use most
 If you installed the repo CLI with `pip install -e .`, use `lumakit ...` as shown below.
 If not, run the same commands as `python3 -m lumakit ...` from the repo root.
 
+On Windows, substitute `py -m lumakit ...` for `python3 -m lumakit ...`. If the default port `7865` is taken (e.g. by NTKDaemon / Nahimic on MSI laptops), the launcher automatically falls back to the next free port and prints the chosen URL. Set `LUMAKIT_WEB_PORT` to pin a specific port.
+
 ## Recommended commands
 
 Start or reuse the backend, then open the web UI:
