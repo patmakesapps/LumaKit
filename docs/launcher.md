@@ -126,7 +126,7 @@ lumakit shortcut install
 What it does:
 
 - on Linux, installs an app launcher in `~/.local/share/applications/`
-- on Windows, creates a desktop shortcut and a Start Menu shortcut when possible
+- on Windows, creates a desktop shortcut and a Start Menu shortcut with the bundled LumaKit icon when possible
 - every shortcut launches `lumakit open`
 
 That means the shortcut does not bypass the launcher logic. It still starts or reuses the backend and opens the web UI normally.

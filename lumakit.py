@@ -31,6 +31,7 @@ if _user_env.exists():
 load_dotenv(REPO_ROOT / ".env")
 
 import uvicorn  # noqa: E402
+from PIL import Image  # noqa: E402
 
 from core.paths import get_data_dir  # noqa: E402
 from core.service import LumaKitService  # noqa: E402
@@ -315,7 +316,19 @@ def _ps_quote(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _create_windows_shortcut(*, target: Path, python_executable: Path, working_dir: Path) -> None:
+def _ensure_windows_icon(source_png: Path) -> Path:
+    icon_target = get_data_dir() / "lumakit.ico"
+    if icon_target.exists() and icon_target.stat().st_mtime >= source_png.stat().st_mtime:
+        return icon_target
+
+    icon_target.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_png) as img:
+        rgba = img.convert("RGBA")
+        rgba.save(icon_target, format="ICO", sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    return icon_target
+
+
+def _create_windows_shortcut(*, target: Path, python_executable: Path, working_dir: Path, icon_path: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     script = "\n".join(
         [
@@ -324,14 +337,19 @@ def _create_windows_shortcut(*, target: Path, python_executable: Path, working_d
             f"$Shortcut.TargetPath = '{_ps_quote(str(python_executable))}'",
             "$Shortcut.Arguments = '-m lumakit open'",
             f"$Shortcut.WorkingDirectory = '{_ps_quote(str(working_dir))}'",
-            f"$Shortcut.IconLocation = '{_ps_quote(str(python_executable))},0'",
+            f"$Shortcut.IconLocation = '{_ps_quote(str(icon_path))},0'",
+            "$Shortcut.Description = 'Start or reuse the LumaKit backend and open the web UI'",
             "$Shortcut.Save()",
         ]
     )
-    subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
         check=True,
+        capture_output=True,
+        text=True,
     )
+    if result.stderr.strip():
+        raise RuntimeError(result.stderr.strip())
 
 
 def _write_windows_cmd_shortcut(*, target: Path, python_executable: Path, working_dir: Path) -> None:
@@ -374,20 +392,24 @@ def command_shortcut_install(args) -> int:
     if os.name == "nt":
         shortcut_targets: list[Path] = []
         fallback_targets: list[Path] = []
+        shortcut_error = None
         candidates = [_windows_desktop_dir() / f"{SHORTCUT_NAME}.lnk"]
         programs_dir = _windows_programs_dir()
         if programs_dir:
             candidates.append(programs_dir / f"{SHORTCUT_NAME}.lnk")
 
         try:
+            windows_icon = _ensure_windows_icon(icon_path)
             for target in candidates:
                 _create_windows_shortcut(
                     target=target,
                     python_executable=python_executable,
                     working_dir=working_dir,
+                    icon_path=windows_icon,
                 )
                 shortcut_targets.append(target)
-        except Exception:
+        except Exception as exc:
+            shortcut_error = str(exc).strip() or repr(exc)
             shortcut_targets.clear()
             fallback_candidates = [_windows_desktop_dir() / f"{SHORTCUT_NAME}.cmd"]
             if programs_dir:
@@ -408,6 +430,8 @@ def command_shortcut_install(args) -> int:
             return 0
 
         print("PowerShell shortcut creation failed; wrote command launcher(s) instead:")
+        if shortcut_error:
+            print(f"  error: {shortcut_error}")
         for target in fallback_targets:
             print(f"  {target}")
         print("These still launch `lumakit open`, but may not show a custom app icon.")

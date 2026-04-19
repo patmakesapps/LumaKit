@@ -152,6 +152,7 @@ lumakit shortcut install
 ```
 
 On Linux, this installs the app-menu launcher. On Windows, it creates the normal clickable shortcuts users expect.
+If native Windows shortcut creation is blocked in a given environment, LumaKit falls back to clickable launcher files.
 
 For a short command reference, see [docs/launcher.md](docs/launcher.md). For boot persistence, see [docs/autostart.md](docs/autostart.md).
 
