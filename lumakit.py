@@ -64,13 +64,40 @@ def _clear_runtime_state(*, pid: int | None = None) -> None:
 def _pid_running(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
+    if os.name == "nt":
+        return _pid_running_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    except OSError:
+        return False
     return True
+
+
+def _pid_running_windows(pid: int) -> bool:
+    try:
+        import ctypes
+    except Exception:
+        return False
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _health_url(port: int | None = None) -> str:
