@@ -430,7 +430,7 @@ def command_serve(args) -> int:
                 "verbose": args.verbose,
                 "owns_service": False,
                 "stop_event": stop_event,
-                "announce_start": False,
+                "announce_start": True,
             },
             daemon=True,
             name="lumakit-telegram",
