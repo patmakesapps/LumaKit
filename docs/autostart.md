@@ -4,16 +4,16 @@ LumaKit can run automatically on boot via a systemd service. The service should
 run the unified backend entrypoint, not a single surface.
 
 For the day-to-day launcher commands, see [launcher.md](launcher.md).
+If you have not installed the repo CLI yet, run the same service command as `python3 -m lumakit service install --force`.
 
 ## Setup
 
-1. Copy the example service file and edit it with your paths:
+1. Generate a service file for your current checkout:
    ```bash
-   cp lumakit.service.example lumakit.service
-   # edit lumakit.service — set User and paths
+   lumakit service install --force
    ```
 
-2. Install and enable:
+2. Review `lumakit.service`, then install and enable it:
    ```bash
    sudo cp lumakit.service /etc/systemd/system/lumakit.service
    sudo systemctl daemon-reload
@@ -42,7 +42,7 @@ For the day-to-day launcher commands, see [launcher.md](launcher.md).
 Stop the service first, then run manually as usual:
 ```bash
 sudo systemctl stop lumakit
-python3 -m lumakit open
+lumakit open
 ```
 
 When done testing, start the service again:

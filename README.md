@@ -6,7 +6,7 @@
 
 LumaKit gives a local LLM a full tool suite — repo ops, shell and Python execution, web search, a headless browser with persistent logins, email, screen capture, and more — and can work autonomously in the background while you live your life. Everything stays on your machine. No OpenAI, no Anthropic, no cloud round-trips. Your model, your data, your rules.
 
-The recommended runtime is now a single backend entrypoint: `python -m lumakit serve`. The convenience launcher `python -m lumakit open` starts or reuses that backend and opens the web UI. Standalone surface modules still exist for direct debugging.
+The recommended runtime is now a single backend entrypoint: `lumakit serve`. The convenience launcher `lumakit open` starts or reuses that backend and opens the web UI. Standalone surface modules still exist for direct debugging.
 
 ---
 
@@ -76,6 +76,14 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
+Install the local `lumakit` command from this checkout:
+
+```bash
+pip install -e .
+```
+
+If you do not want to install the CLI yet, every launcher command below also works as `python -m lumakit ...` from the repo root.
+
 For Telegram speech, also build `whisper.cpp` locally and make sure its `base.en` model is downloaded.
 
 ## Configuration
@@ -108,28 +116,36 @@ Copy `.env.example` to `.env` and set the values you want to use.
 Start or reuse the backend and open the web UI:
 
 ```bash
-python -m lumakit open
+lumakit open
 ```
 
 Check status:
 
 ```bash
-python -m lumakit status
+lumakit status
 ```
 
 Stop the backend:
 
 ```bash
-python -m lumakit stop
+lumakit stop
 ```
 
 Run the backend in the foreground without opening a browser:
 
 ```bash
-python -m lumakit serve
+lumakit serve
 ```
 
-For a short command reference, see [docs/launcher.md](docs/launcher.md).
+Generate a ready-to-install systemd unit for always-on mode:
+
+```bash
+lumakit service install --force
+```
+
+For a short command reference, see [docs/launcher.md](docs/launcher.md). For boot persistence, see [docs/autostart.md](docs/autostart.md).
+
+`ollama launch lumakit` is not wired up yet in Ollama itself. The launcher contract on our side is now `lumakit open`; the remaining step is upstream registration in Ollama's launch registry.
 
 ### Web UI
 
@@ -148,7 +164,7 @@ The web UI supports:
 - inline reactions on user messages
 - inline delivered screenshots and images
 
-Direct web-surface launches are useful for debugging, but the normal path is `python -m lumakit open` or `python -m lumakit serve`.
+Direct web-surface launches are useful for debugging, but the normal path is `lumakit open` or `lumakit serve`.
 
 ### CLI
 

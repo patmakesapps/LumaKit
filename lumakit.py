@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import getpass
 import json
 import os
 import signal
@@ -27,6 +28,7 @@ from surfaces import web as web_surface
 
 RUNTIME_STATE_FILE = get_data_dir() / "lumakit-runtime.json"
 DAEMON_LOG_FILE = get_data_dir() / "lumakit-daemon.log"
+DEFAULT_SERVICE_PATH = REPO_ROOT / "lumakit.service"
 
 
 def _runtime_state() -> dict | None:
@@ -149,6 +151,44 @@ def _spawn_daemon(*, verbose: bool = False) -> None:
         )
 
 
+def _render_systemd_service(
+    *,
+    user: str,
+    working_dir: Path,
+    env_file: Path,
+    python_executable: Path,
+) -> str:
+    return "\n".join(
+        [
+            "[Unit]",
+            "Description=LumaKit AI Agent",
+            "After=network-online.target",
+            "Wants=network-online.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            f"User={user}",
+            f"WorkingDirectory={working_dir}",
+            f"EnvironmentFile=-{env_file}",
+            f"ExecStart={python_executable} -m lumakit serve",
+            "Restart=on-failure",
+            "RestartSec=10",
+            "StandardOutput=journal",
+            "StandardError=journal",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target",
+            "",
+        ]
+    )
+
+
+def _service_install_target(args) -> Path:
+    if args.system:
+        return Path("/etc/systemd/system") / f"{args.name}.service"
+    return Path(args.output).expanduser().resolve(strict=False) if args.output else DEFAULT_SERVICE_PATH
+
+
 def command_open(args) -> int:
     state = _runtime_state()
     health = _health_check(state.get("port") if state else None)
@@ -227,6 +267,49 @@ def command_stop(args) -> int:
 
     print("LumaKit is still shutting down. Check status again in a few seconds.")
     return 1
+
+
+def command_service_install(args) -> int:
+    target = _service_install_target(args)
+    working_dir = Path(args.working_dir).expanduser().resolve() if args.working_dir else REPO_ROOT
+    env_file = Path(args.env_file).expanduser().resolve(strict=False) if args.env_file else working_dir / ".env"
+    python_executable = Path(args.python).expanduser().resolve() if args.python else Path(sys.executable).resolve()
+    user = args.user or getpass.getuser()
+    service_text = _render_systemd_service(
+        user=user,
+        working_dir=working_dir,
+        env_file=env_file,
+        python_executable=python_executable,
+    )
+
+    if target.exists() and not args.force and target.read_text(encoding="utf-8") != service_text:
+        print(f"{target} already exists. Re-run with --force to overwrite it.")
+        return 1
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(service_text, encoding="utf-8")
+    except PermissionError:
+        print(f"Permission denied writing {target}.")
+        if args.system:
+            print("Re-run this command with sudo, or omit --system and copy the file manually.")
+        return 1
+
+    print(f"Wrote {target}.")
+
+    if args.system:
+        print("Next steps:")
+        print("  sudo systemctl daemon-reload")
+        print(f"  sudo systemctl enable {args.name}.service")
+        print(f"  sudo systemctl start {args.name}.service")
+        return 0
+
+    print("Install it with:")
+    print(f"  sudo cp {target} /etc/systemd/system/{args.name}.service")
+    print("  sudo systemctl daemon-reload")
+    print(f"  sudo systemctl enable {args.name}.service")
+    print(f"  sudo systemctl start {args.name}.service")
+    return 0
 
 
 def command_serve(args) -> int:
@@ -317,6 +400,24 @@ def build_parser() -> argparse.ArgumentParser:
     stop = subparsers.add_parser("stop", help="stop the running backend")
     stop.add_argument("--timeout", type=float, default=15.0, help="seconds to wait for shutdown")
     stop.set_defaults(func=command_stop)
+
+    service = subparsers.add_parser("service", help="generate or install service files for always-on mode")
+    service_subparsers = service.add_subparsers(dest="service_command", required=True)
+
+    service_install = service_subparsers.add_parser("install", help="write a systemd unit for `lumakit serve`")
+    service_install.add_argument("--name", default="lumakit", help="service name, default: lumakit")
+    service_install.add_argument("--output", help="write the unit file to this path")
+    service_install.add_argument(
+        "--system",
+        action="store_true",
+        help="write directly to /etc/systemd/system/<name>.service",
+    )
+    service_install.add_argument("--user", help="system user that should own the service process")
+    service_install.add_argument("--working-dir", help="working directory for the service")
+    service_install.add_argument("--env-file", help="EnvironmentFile path for systemd")
+    service_install.add_argument("--python", help="python executable to use in ExecStart")
+    service_install.add_argument("--force", action="store_true", help="overwrite an existing unit file")
+    service_install.set_defaults(func=command_service_install)
 
     return parser
 

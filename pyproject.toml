@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=66"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumakit"
+version = "0.1.0"
+description = "Local-first AI agent with web and Telegram surfaces"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dynamic = ["dependencies"]
+
+[project.urls]
+Homepage = "https://github.com/patmakesapps/LumaKit"
+Repository = "https://github.com/patmakesapps/LumaKit"
+
+[project.scripts]
+lumakit = "lumakit:main"
+
+[tool.setuptools]
+py-modules = ["agent", "lumakit", "ollama_client", "tool_registry"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "surfaces*", "tools*"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
