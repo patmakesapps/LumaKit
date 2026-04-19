@@ -1,6 +1,6 @@
 # LumaKit
 
-![LumaKit Logo](photos/lumakit_cat_logo.png)
+![LumaKit Hero](photos/lumakit_hero.png)
 
 **A local-first AI agent for Ollama with a clean web UI, optional Telegram access, and a launcher flow that feels like a real app instead of a dev script.**
 
@@ -12,6 +12,20 @@ LumaKit gives an Ollama-backed model real tools: shell execution, repository wor
 - **Real launcher flow.** `lumakit open` starts or reuses the backend and opens the UI.
 - **Clean desktop experience.** Linux gets an app-menu launcher; Windows gets Desktop and Start Menu shortcuts.
 - **Practical agent features.** Not just chat: tools, memory, tasks, browser sessions, and notifications.
+
+## What it looks like
+
+LumaKit is not just a terminal wrapper around Ollama. The normal experience is a real web UI with conversation history, tool approvals, screenshots, tasks, and runtime settings.
+
+![LumaKit Web UI](photos/lumi_full_ui_screenshot.png)
+
+The web UI is also where first-run model setup and later model switching now live:
+
+![LumaKit Settings](photos/lumi_settings_screenshot.png)
+
+And the launcher story is finally clean enough to hand to normal users:
+
+![LumaKit Desktop Launcher](photos/lumi_desktop_icon_screenshot.png)
 
 ## Quick Start
 
@@ -42,6 +56,18 @@ If you want step-by-step setup, use the platform guides:
 - [Linux Quick Start](docs/quickstart_linux.md)
 - [Windows Quick Start](docs/quickstart_windows.md)
 
+If you want the 30-second version:
+
+```bash
+git clone https://github.com/patmakesapps/LumaKit.git
+cd LumaKit
+pip install -r requirements.txt
+playwright install chromium
+pip install -e .
+cp .env.example .env
+lumakit open
+```
+
 ## Recommended first-run model
 
 Today, the repo expects you to set your model explicitly via env vars. The main knob is:
@@ -62,7 +88,7 @@ Recommended positioning for now:
 - if your Ollama setup exposes cloud-backed models and you want instant high-quality tool use, you can point `OLLAMA_MODEL` at one of those
 - if you want the fully local/private path, point `OLLAMA_MODEL` at a local model you have pulled
 
-The repo already supports the local/private story cleanly. A richer first-run model picker is still a product upgrade, not current shipped behavior.
+The repo already supports the local/private story cleanly, and the web UI now gives users a first-run model-selection path plus persistent runtime model switching without editing `.env`.
 
 ## Install
 
@@ -94,6 +120,11 @@ python -m lumakit ...
 
 On Windows, use `py -m lumakit ...` if that is your normal Python entrypoint.
 
+If you want the platform-specific versions with exact shell commands, use:
+
+- [Linux Quick Start](docs/quickstart_linux.md)
+- [Windows Quick Start](docs/quickstart_windows.md)
+
 ## Configuration
 
 Copy `.env.example` to `.env` and set the values you want to use.
@@ -124,6 +155,12 @@ Normal user flow:
 ```bash
 lumakit open
 ```
+
+That single command is the product contract:
+
+- if LumaKit is not running, it starts the backend
+- if LumaKit is already running, it reuses it
+- then it opens the web UI
 
 Other useful commands:
 
@@ -161,6 +198,15 @@ LumaKit currently exposes three ways to interact:
 
 The normal path is the web UI through `lumakit open`. Surface-specific modules still exist for direct debugging, but they are not the polished default.
 
+The web UI can already:
+
+- chat with the agent
+- show live tool activity
+- handle approval flows
+- display screenshots and inline media
+- expose runtime model settings
+- block first-run use until a model is selected when nothing is configured
+
 ## Core features
 
 - **Tool-calling agent** with multi-round tool loops
@@ -195,6 +241,17 @@ What you can do today:
 What is **not** shipped yet:
 
 - a richer multi-profile model-management flow beyond the current primary/fallback selection
+
+## Why this is ready for launch
+
+The repo now has the pieces a normal Ollama user actually needs:
+
+- a clear install path
+- Linux and Windows quick-start guides
+- launcher commands that behave like a real app
+- shortcuts that make LumaKit easy to reopen
+- a first-run model-selection flow instead of a dead-end
+- runtime model switching in the web UI without hand-editing `.env`
 
 ## Documentation map
 
