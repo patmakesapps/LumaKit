@@ -6,6 +6,7 @@ import getpass
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -98,6 +99,47 @@ def _pid_running_windows(pid: int) -> bool:
         return exit_code.value == STILL_ACTIVE
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _port_is_free(port: int) -> bool:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    return True
+
+
+def _resolve_port(preferred: int, attempts: int = 20) -> int:
+    """Return `preferred` if free, otherwise the next free port in range.
+
+    Handles the common case where another process (e.g. NTKDaemon / Nahimic
+    on Windows) is squatting the default port. If the user explicitly set
+    LUMAKIT_WEB_PORT, we still walk forward — telling them "your chosen port
+    is taken" is better than silently exiting.
+    """
+    for offset in range(attempts):
+        candidate = preferred + offset
+        if _port_is_free(candidate):
+            if offset:
+                print(
+                    f"Port {preferred} is in use — falling back to {candidate}. "
+                    f"Set LUMAKIT_WEB_PORT to pin a specific port."
+                )
+            return candidate
+    raise RuntimeError(
+        f"Could not find a free port in {preferred}-{preferred + attempts - 1}. "
+        "Set LUMAKIT_WEB_PORT to a known-free port."
+    )
+
+
+def _apply_port(port: int) -> None:
+    """Update the web surface module-level port so prints, runtime state, and
+    health checks all agree on the chosen value."""
+    web_surface.PORT = port
+    web_surface.WEB_URL = f"http://localhost:{port}"
 
 
 def _health_url(port: int | None = None) -> str:
@@ -232,13 +274,28 @@ def command_open(args) -> int:
 
     print("Starting LumaKit in the background...")
     _spawn_daemon(verbose=args.verbose)
-    health = _wait_for_health(timeout=args.timeout)
+
+    # Wait for the daemon to publish its chosen port (it may fall back off
+    # the default if something else is squatting it), then health-check that.
+    deadline = time.time() + args.timeout
+    daemon_state = None
+    while time.time() < deadline:
+        candidate = _runtime_state()
+        if candidate and candidate.get("port"):
+            daemon_state = candidate
+            break
+        time.sleep(0.25)
+
+    port = (daemon_state or {}).get("port")
+    url = (daemon_state or {}).get("url", web_surface.WEB_URL)
+    remaining = max(1.0, deadline - time.time())
+    health = _wait_for_health(timeout=remaining, port=port)
     if not health:
         print(f"LumaKit did not become healthy in time. Check {DAEMON_LOG_FILE}.")
         return 1
 
-    print(f"LumaKit is running at {web_surface.WEB_URL}.")
-    _open_browser(web_surface.WEB_URL)
+    print(f"LumaKit is running at {url}.")
+    _open_browser(url)
     return 0
 
 
@@ -344,6 +401,8 @@ def command_serve(args) -> int:
     if running_state:
         print(message)
         return 1
+
+    _apply_port(_resolve_port(web_surface.PORT))
 
     web_surface.configure_owner()
 
