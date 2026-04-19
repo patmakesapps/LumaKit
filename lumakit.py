@@ -20,12 +20,21 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 os.chdir(REPO_ROOT)
 
-import uvicorn
+# Load env files before importing any surface/core module that reads env
+# vars at import time (telegram_state, etc). User overrides win over repo .env.
+from dotenv import load_dotenv  # noqa: E402
 
-from core.paths import get_data_dir
-from core.service import LumaKitService
-from surfaces import telegram as telegram_surface
-from surfaces import web as web_surface
+_user_env = Path.home() / ".lumakit" / "config.env"
+if _user_env.exists():
+    load_dotenv(_user_env)
+load_dotenv(REPO_ROOT / ".env")
+
+import uvicorn  # noqa: E402
+
+from core.paths import get_data_dir  # noqa: E402
+from core.service import LumaKitService  # noqa: E402
+from surfaces import telegram as telegram_surface  # noqa: E402
+from surfaces import web as web_surface  # noqa: E402
 
 RUNTIME_STATE_FILE = get_data_dir() / "lumakit-runtime.json"
 DAEMON_LOG_FILE = get_data_dir() / "lumakit-daemon.log"
