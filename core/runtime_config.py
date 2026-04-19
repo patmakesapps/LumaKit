@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from core.app_runtime_config import get_app_runtime_config
 from core.telegram_state import OWNER_CONFIG, OWNER_ID, _get_user_config
 
 
@@ -23,13 +24,16 @@ def get_effective_config_for_user(
     local_model=None,
 ):
     """Return the effective model/runtime config for a user."""
-    default_model = default_model if default_model is not None else os.getenv("OLLAMA_MODEL")
+    env_model = default_model if default_model is not None else os.getenv("OLLAMA_MODEL")
     default_fallback = (
         default_fallback
         if default_fallback is not None
         else os.getenv("OLLAMA_FALLBACK_MODEL")
     )
     local_model = local_model if local_model is not None else os.getenv("OLLAMA_LOCAL_MODEL", "")
+    app_cfg = get_app_runtime_config()
+    default_model = app_cfg.get("primary_model") or env_model
+    default_fallback = app_cfg.get("fallback_model") or default_fallback
 
     if str(user_id) == str(OWNER_ID):
         primary = OWNER_CONFIG.get("primary_model") or default_model

@@ -35,6 +35,8 @@ For the fastest successful first run, do these steps in order:
    lumakit open
    ```
 
+If you skip step 4, LumaKit now opens into a first-run setup state and asks you to choose a primary model in the web UI before chatting.
+
 If you want step-by-step setup, use the platform guides:
 
 - [Linux Quick Start](docs/quickstart_linux.md)
@@ -51,8 +53,8 @@ OLLAMA_MODEL="your-model-here"
 Current shipped behavior:
 
 - the web UI displays the current configured model
+- the web UI Settings view can persist a primary/fallback model override and list detected Ollama models
 - Telegram owner controls can override the owner's runtime model with `/model`
-- there is **not yet** a web UI model picker for switching among installed models
 
 Recommended positioning for now:
 
@@ -187,13 +189,12 @@ What you can do today:
 
 - set `OLLAMA_MODEL` and `OLLAMA_FALLBACK_MODEL` in `.env`
 - set `OLLAMA_LOCAL_MODEL` as an optional locally-pulled alternative
+- in the web UI Settings view, choose a persisted primary/fallback model override
 - on Telegram, the owner can use `/model` to switch their own runtime preferences
 
 What is **not** shipped yet:
 
-- a web UI model picker that lists installed Ollama models and lets the user switch there
-
-That is a good next product improvement, but it is not documented here as if it already exists.
+- a richer multi-profile model-management flow beyond the current primary/fallback selection
 
 ## Documentation map
 

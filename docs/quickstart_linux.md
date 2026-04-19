@@ -52,6 +52,8 @@ OLLAMA_FALLBACK_MODEL="your-fallback-model"
 LUMAKIT_WEB_PORT="7865"
 ```
 
+If you prefer, you can leave `OLLAMA_MODEL` blank and choose your primary model from the web UI on first launch. The app will block chat until a model is selected.
+
 ## 6. Launch LumaKit
 
 ```bash
@@ -63,6 +65,8 @@ That should:
 - start the backend if it is not already running
 - reuse it if it is already running
 - open the web UI in your browser
+
+If no model is configured in `.env` or app settings yet, LumaKit opens into a first-run setup state and asks you to choose one in Settings before chatting.
 
 ## 7. Install the Linux launcher
 

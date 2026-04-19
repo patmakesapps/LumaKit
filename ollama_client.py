@@ -137,3 +137,10 @@ class OllamaClient:
 
         self.last_model_used = outcome.get("used_model")
         return outcome["result"]
+
+    def tags(self, request_timeout=None):
+        url = f"{self.base_url}/api/tags"
+        timeout = request_timeout if request_timeout is not None else self.request_timeout
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.json()

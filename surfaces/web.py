@@ -45,10 +45,12 @@ from core.cli import Spinner
 from core.display import DisplayHooks
 from core.interface_context import set_interface
 from core.paths import get_data_dir
-from core.runtime_config import apply_user_runtime
+from core.runtime_config import apply_user_runtime, get_effective_config_for_user
 from core.service import LumaKitService, Surface
 from core.telegram_state import OWNER_ID
 from core import task_store, memory_store
+from core.app_runtime_config import get_app_runtime_config, save_app_runtime_config
+from ollama_client import OllamaClient
 from tools.comms.email import send_preapproved
 from tools.comms.react import set_react_context
 from tools.memory.memory_tools import set_active_user as set_memory_active_user
@@ -88,14 +90,63 @@ WEB_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(WEB_MEDIA_DIR)), name="media")
 
 
+def _env_runtime_defaults():
+    return {
+        "primary_model": str(os.getenv("OLLAMA_MODEL", "") or "").strip(),
+        "fallback_model": str(os.getenv("OLLAMA_FALLBACK_MODEL", "") or "").strip(),
+        "local_model": str(os.getenv("OLLAMA_LOCAL_MODEL", "") or "").strip(),
+    }
+
+
+def _discover_ollama_models():
+    try:
+        payload = OllamaClient(request_timeout=10).tags(request_timeout=10)
+        models = payload.get("models", []) if isinstance(payload, dict) else []
+        names = sorted(
+            {
+                str(item.get("name", "") or "").strip()
+                for item in models
+                if isinstance(item, dict) and str(item.get("name", "") or "").strip()
+            }
+        )
+        return names, None
+    except Exception as exc:
+        return [], str(exc)
+
+
+def _settings_payload():
+    env_cfg = _env_runtime_defaults()
+    effective = get_effective_config_for_user(WEB_USER_ID)
+    app_cfg = get_app_runtime_config()
+    installed_models, model_error = _discover_ollama_models()
+    setup_required = not bool(effective.get("primary_model"))
+    return {
+        "model": effective.get("primary_model", ""),
+        "fallback_model": effective.get("fallback_model", ""),
+        "data_dir": str(get_data_dir()),
+        "app_primary_model": app_cfg.get("primary_model", ""),
+        "app_fallback_model": app_cfg.get("fallback_model", ""),
+        "env_primary_model": env_cfg["primary_model"],
+        "env_fallback_model": env_cfg["fallback_model"],
+        "local_model": effective.get("local_model", "") or env_cfg["local_model"],
+        "setup_required": setup_required,
+        "installed_models": installed_models,
+        "installed_models_error": model_error,
+    }
+
+
 # ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 async def health():
-    model = os.getenv("OLLAMA_MODEL", "unknown")
-    return {"status": "ok", "model": model}
+    cfg = get_effective_config_for_user(WEB_USER_ID)
+    return {
+        "status": "ok",
+        "model": cfg.get("primary_model") or "not configured",
+        "setup_required": not bool(cfg.get("primary_model")),
+    }
 
 
 @app.get("/api/chats")
@@ -148,11 +199,21 @@ async def api_list_unshown_notifications():
 
 @app.get("/api/settings")
 async def api_get_settings():
-    return {
-        "model": os.getenv("OLLAMA_MODEL", ""),
-        "fallback_model": os.getenv("OLLAMA_FALLBACK_MODEL", ""),
-        "data_dir": str(get_data_dir()),
-    }
+    return _settings_payload()
+
+
+@app.post("/api/settings")
+async def api_update_settings(payload: dict):
+    primary_model = str(payload.get("primary_model", "") or "").strip()
+    fallback_model = str(payload.get("fallback_model", "") or "").strip()
+
+    save_app_runtime_config(
+        {
+            "primary_model": primary_model,
+            "fallback_model": fallback_model,
+        }
+    )
+    return _settings_payload()
 
 
 # ---------------------------------------------------------------------------

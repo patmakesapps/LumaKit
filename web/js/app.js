@@ -31,6 +31,8 @@ const $navTasks = document.getElementById('nav-tasks');
 const $navSettings = document.getElementById('nav-settings');
 const $taskList = document.getElementById('task-list');
 const $settingsContent = document.getElementById('settings-content');
+const $setupOverlay = document.getElementById('setup-overlay');
+const $setupOpenSettings = document.getElementById('setup-open-settings');
 
 // --- State ---
 let isWorking = false;
@@ -42,6 +44,8 @@ let pendingConfirm = null;
 let currentTurnHadRichReply = false;
 let notificationPollTimer = null;
 const emailDraftCards = new Map();
+let settingsState = null;
+let requiresModelSetup = false;
 
 // --- Markdown setup ---
 if (window.marked) {
@@ -77,6 +81,23 @@ function scrollToBottom() {
 function setWorking(working) {
     isWorking = working;
     // Type /stop to interrupt — no UI toggle needed
+}
+
+function applySetupState() {
+    const blocked = !!requiresModelSetup;
+    $input.disabled = blocked;
+    $sendBtn.disabled = blocked;
+    $newChatBtn.disabled = blocked;
+    if (blocked) {
+        $input.placeholder = 'Choose a model in Settings before chatting...';
+        $setupOverlay.classList.remove('hidden');
+        if (currentView !== 'settings') {
+            switchView('settings');
+        }
+    } else {
+        $input.placeholder = 'Message Lumi... (type /stop to interrupt)';
+        $setupOverlay.classList.add('hidden');
+    }
 }
 
 function removeStatus() {
@@ -545,23 +566,137 @@ async function loadTasks() {
 async function loadSettings() {
     try {
         const res = await fetch('/api/settings');
+        if (!res.ok) {
+            throw new Error(`Settings API returned ${res.status}`);
+        }
         const settings = await res.json();
+        settingsState = settings;
+        requiresModelSetup = !!settings.setup_required;
+
+        const modelOptions = (settings.installed_models || [])
+            .map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+            .join('');
+        const banner = settings.setup_required ? `
+            <div class="settings-banner">
+                No primary model is configured yet. Pick one below before using the web UI.
+            </div>
+        ` : '';
+        const modelsError = settings.installed_models_error
+            ? `<div class="settings-error">Could not load installed models from Ollama: ${escapeHtml(settings.installed_models_error)}</div>`
+            : '';
+
         $settingsContent.innerHTML = `
+            ${banner}
+            <div class="settings-card">
+                <h3>Runtime Models</h3>
+                <div class="settings-note">
+                    Choose the model LumaKit should use by default in the web UI. These settings persist in the app data directory and override the .env defaults until you reset them.
+                </div>
+                <form id="settings-form" class="settings-form">
+                    <div class="settings-field">
+                        <label for="primary-model-input">Primary Model</label>
+                        <input id="primary-model-input" class="settings-input" type="text" value="${escapeHtml(settings.app_primary_model || settings.model || '')}" placeholder="e.g. glm-5:cloud or qwen3">
+                    </div>
+                    <div class="settings-field">
+                        <label for="fallback-model-input">Fallback Model</label>
+                        <input id="fallback-model-input" class="settings-input" type="text" value="${escapeHtml(settings.app_fallback_model || settings.fallback_model || '')}" placeholder="Optional">
+                    </div>
+                    <div class="settings-field">
+                        <label for="installed-models-select">Detected Ollama Models</label>
+                        <select id="installed-models-select" class="settings-select">
+                            <option value="">Choose an installed model...</option>
+                            ${modelOptions}
+                        </select>
+                    </div>
+                    ${modelsError}
+                    <div class="settings-actions">
+                        <button type="submit" class="settings-btn primary">Save Models</button>
+                        <button type="button" id="reset-model-settings" class="settings-btn secondary">Reset To .env Defaults</button>
+                    </div>
+                </form>
+            </div>
             <div class="setting-row">
-                <span class="setting-label">Model</span>
+                <span class="setting-label">Effective Primary Model</span>
                 <span class="setting-value">${settings.model || 'not set'}</span>
             </div>
             <div class="setting-row">
-                <span class="setting-label">Fallback Model</span>
+                <span class="setting-label">Effective Fallback Model</span>
                 <span class="setting-value">${settings.fallback_model || 'none'}</span>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">.env Primary Model</span>
+                <span class="setting-value">${settings.env_primary_model || 'not set'}</span>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">.env Fallback Model</span>
+                <span class="setting-value">${settings.env_fallback_model || 'none'}</span>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">Optional Local Model</span>
+                <span class="setting-value">${settings.local_model || 'not set'}</span>
             </div>
             <div class="setting-row">
                 <span class="setting-label">Data Directory</span>
                 <span class="setting-value">${settings.data_dir}</span>
             </div>
         `;
+
+        const $primaryModelInput = document.getElementById('primary-model-input');
+        const $fallbackModelInput = document.getElementById('fallback-model-input');
+        const $installedModelsSelect = document.getElementById('installed-models-select');
+        const $settingsForm = document.getElementById('settings-form');
+        const $resetModelSettings = document.getElementById('reset-model-settings');
+
+        $installedModelsSelect?.addEventListener('change', () => {
+            if ($installedModelsSelect.value) {
+                $primaryModelInput.value = $installedModelsSelect.value;
+            }
+        });
+
+        $settingsForm?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const primary_model = $primaryModelInput.value.trim();
+            const fallback_model = $fallbackModelInput.value.trim();
+            if (!primary_model && !(settings.env_primary_model || '').trim()) {
+                loadSettingsError('Choose a primary model or set OLLAMA_MODEL in .env first.');
+                return;
+            }
+            await saveSettings({ primary_model, fallback_model });
+        });
+
+        $resetModelSettings?.addEventListener('click', async () => {
+            await saveSettings({ primary_model: '', fallback_model: '' });
+        });
+
+        applySetupState();
     } catch (e) {
-        $settingsContent.innerHTML = '<p style="color: var(--error)">Failed to load settings.</p>';
+        console.error('Failed to load settings', e);
+        const message = e?.message || String(e);
+        $settingsContent.innerHTML = `<p style="color: var(--error)">Failed to load settings: ${escapeHtml(message)}</p>`;
+    }
+}
+
+function loadSettingsError(message) {
+    const existing = $settingsContent.querySelector('.settings-error-inline');
+    if (existing) existing.remove();
+    const error = document.createElement('p');
+    error.className = 'settings-error settings-error-inline';
+    error.textContent = message;
+    $settingsContent.prepend(error);
+}
+
+async function saveSettings(payload) {
+    try {
+        const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error('save failed');
+        await loadSettings();
+        await loadHealth();
+    } catch (e) {
+        loadSettingsError('Failed to save settings.');
     }
 }
 
@@ -571,6 +706,10 @@ async function loadHealth() {
         const res = await fetch('/api/health');
         const data = await res.json();
         $modelBadge.textContent = data.model || 'unknown';
+        if (typeof data.setup_required === 'boolean') {
+            requiresModelSetup = data.setup_required;
+            applySetupState();
+        }
     } catch (e) {
         $modelBadge.textContent = 'offline';
     }
@@ -865,6 +1004,10 @@ document.addEventListener('keydown', (e) => {
 function sendMessage() {
     const text = $input.value.trim();
     if (!text) return;
+    if (requiresModelSetup) {
+        switchView('settings');
+        return;
+    }
 
     currentTurnHadRichReply = false;
     addMessage('user', text);
@@ -903,6 +1046,7 @@ $sidebarToggle.onclick = () => {
 // Navigation
 $navTasks.onclick = () => switchView('task');
 $navSettings.onclick = () => switchView('settings');
+$setupOpenSettings.onclick = () => switchView('settings');
 
 // Click outside sidebar to close on mobile
 document.addEventListener('click', (e) => {
@@ -917,4 +1061,5 @@ document.addEventListener('click', (e) => {
 // --- Boot ---
 enterCenteredMode();
 ws.connect();
+loadSettings();
 $input.focus();
