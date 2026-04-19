@@ -39,6 +39,12 @@ Generate a systemd unit for always-on mode:
 lumakit service install --force
 ```
 
+Install a desktop/start-menu shortcut that launches `lumakit open`:
+
+```bash
+lumakit shortcut install
+```
+
 ## When to use each one
 
 Use `lumakit open` when:
@@ -62,6 +68,12 @@ Use `lumakit stop` when:
 
 - you are done testing
 - you want to ensure there is no background LumaKit process still running
+
+Use `lumakit shortcut install` when:
+
+- you want a click-to-open launcher instead of typing commands
+- you want a Linux app launcher or a Windows desktop / Start Menu shortcut
+- you want that shortcut to start LumaKit if needed, then open the UI
 
 ## Clean testing flow
 
@@ -102,6 +114,22 @@ python3 -m lumakit serve
 ```
 
 That is the always-on path.
+
+## Native shortcut install
+
+The shortcut installer is the convenience layer on top of the normal launcher:
+
+```bash
+lumakit shortcut install
+```
+
+What it does:
+
+- on Linux, installs an app launcher in `~/.local/share/applications/`
+- on Windows, creates a desktop shortcut and a Start Menu shortcut when possible
+- every shortcut launches `lumakit open`
+
+That means the shortcut does not bypass the launcher logic. It still starts or reuses the backend and opens the web UI normally.
 
 ## Surface-specific debug commands
 

@@ -145,6 +145,14 @@ Generate a ready-to-install systemd unit for always-on mode:
 lumakit service install --force
 ```
 
+Install a desktop/start-menu shortcut that launches the normal UI flow:
+
+```bash
+lumakit shortcut install
+```
+
+On Linux, this installs the app-menu launcher. On Windows, it creates the normal clickable shortcuts users expect.
+
 For a short command reference, see [docs/launcher.md](docs/launcher.md). For boot persistence, see [docs/autostart.md](docs/autostart.md).
 
 `ollama launch lumakit` is not wired up yet in Ollama itself. The launcher contract on our side is now `lumakit open`; the remaining step is upstream registration in Ollama's launch registry.

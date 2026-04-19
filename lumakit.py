@@ -5,6 +5,7 @@ import atexit
 import getpass
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -39,6 +40,8 @@ from surfaces import web as web_surface  # noqa: E402
 RUNTIME_STATE_FILE = get_data_dir() / "lumakit-runtime.json"
 DAEMON_LOG_FILE = get_data_dir() / "lumakit-daemon.log"
 DEFAULT_SERVICE_PATH = REPO_ROOT / "lumakit.service"
+SHORTCUT_NAME = "LumaKit"
+LINUX_SHORTCUT_ID = "lumakit.desktop"
 
 
 def _runtime_state() -> dict | None:
@@ -259,6 +262,159 @@ def _render_systemd_service(
             "",
         ]
     )
+
+
+def _desktop_exec_arg(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9@%_+=:,./-]+", value):
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _render_linux_desktop_entry(*, python_executable: Path, working_dir: Path, icon_path: Path) -> str:
+    exec_value = " ".join(
+        _desktop_exec_arg(part)
+        for part in (str(python_executable), "-m", "lumakit", "open")
+    )
+    return "\n".join(
+        [
+            "[Desktop Entry]",
+            "Version=1.0",
+            "Type=Application",
+            f"Name={SHORTCUT_NAME}",
+            "Comment=Start or reuse the LumaKit backend and open the web UI",
+            f"Exec={exec_value}",
+            f"Path={working_dir}",
+            f"Icon={icon_path}",
+            "Terminal=false",
+            "StartupNotify=true",
+            "Categories=Utility;Development;",
+            "",
+        ]
+    )
+
+
+def _write_linux_shortcut(target: Path, content: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    target.chmod(0o755)
+
+
+def _windows_desktop_dir() -> Path:
+    return Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
+
+
+def _windows_programs_dir() -> Path | None:
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+
+
+def _ps_quote(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _create_windows_shortcut(*, target: Path, python_executable: Path, working_dir: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    script = "\n".join(
+        [
+            "$WshShell = New-Object -ComObject WScript.Shell",
+            f"$Shortcut = $WshShell.CreateShortcut('{_ps_quote(str(target))}')",
+            f"$Shortcut.TargetPath = '{_ps_quote(str(python_executable))}'",
+            "$Shortcut.Arguments = '-m lumakit open'",
+            f"$Shortcut.WorkingDirectory = '{_ps_quote(str(working_dir))}'",
+            f"$Shortcut.IconLocation = '{_ps_quote(str(python_executable))},0'",
+            "$Shortcut.Save()",
+        ]
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        check=True,
+    )
+
+
+def _write_windows_cmd_shortcut(*, target: Path, python_executable: Path, working_dir: Path) -> None:
+    content = "\r\n".join(
+        [
+            "@echo off",
+            f'cd /d "{working_dir}"',
+            f'"{python_executable}" -m lumakit open',
+            "",
+        ]
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+
+
+def command_shortcut_install(args) -> int:
+    python_executable = Path(sys.executable).resolve()
+    working_dir = REPO_ROOT
+    icon_path = (REPO_ROOT / "photos" / "lumakit_cat_logo.png").resolve()
+
+    if sys.platform.startswith("linux"):
+        targets: list[Path] = []
+        content = _render_linux_desktop_entry(
+            python_executable=python_executable,
+            working_dir=working_dir,
+            icon_path=icon_path,
+        )
+
+        app_target = Path.home() / ".local" / "share" / "applications" / LINUX_SHORTCUT_ID
+        _write_linux_shortcut(app_target, content)
+        targets.append(app_target)
+
+        print("Installed LumaKit shortcut(s):")
+        for target in targets:
+            print(f"  {target}")
+        print("These launch `lumakit open` via the current Python environment.")
+        print("On Linux this installs the app-menu launcher only.")
+        return 0
+
+    if os.name == "nt":
+        shortcut_targets: list[Path] = []
+        fallback_targets: list[Path] = []
+        candidates = [_windows_desktop_dir() / f"{SHORTCUT_NAME}.lnk"]
+        programs_dir = _windows_programs_dir()
+        if programs_dir:
+            candidates.append(programs_dir / f"{SHORTCUT_NAME}.lnk")
+
+        try:
+            for target in candidates:
+                _create_windows_shortcut(
+                    target=target,
+                    python_executable=python_executable,
+                    working_dir=working_dir,
+                )
+                shortcut_targets.append(target)
+        except Exception:
+            shortcut_targets.clear()
+            fallback_candidates = [_windows_desktop_dir() / f"{SHORTCUT_NAME}.cmd"]
+            if programs_dir:
+                fallback_candidates.append(programs_dir / f"{SHORTCUT_NAME}.cmd")
+            for target in fallback_candidates:
+                _write_windows_cmd_shortcut(
+                    target=target,
+                    python_executable=python_executable,
+                    working_dir=working_dir,
+                )
+                fallback_targets.append(target)
+
+        if shortcut_targets:
+            print("Installed LumaKit shortcut(s):")
+            for target in shortcut_targets:
+                print(f"  {target}")
+            print("These launch `lumakit open` via the current Python environment.")
+            return 0
+
+        print("PowerShell shortcut creation failed; wrote command launcher(s) instead:")
+        for target in fallback_targets:
+            print(f"  {target}")
+        print("These still launch `lumakit open`, but may not show a custom app icon.")
+        return 0
+
+    print(f"Shortcut install is not supported on this platform: {sys.platform}")
+    return 1
 
 
 def _service_install_target(args) -> Path:
@@ -513,6 +669,15 @@ def build_parser() -> argparse.ArgumentParser:
     service_install.add_argument("--python", help="python executable to use in ExecStart")
     service_install.add_argument("--force", action="store_true", help="overwrite an existing unit file")
     service_install.set_defaults(func=command_service_install)
+
+    shortcut = subparsers.add_parser("shortcut", help="install desktop/start-menu launchers for `lumakit open`")
+    shortcut_subparsers = shortcut.add_subparsers(dest="shortcut_command", required=True)
+
+    shortcut_install = shortcut_subparsers.add_parser(
+        "install",
+        help="install native launcher shortcuts for the current platform",
+    )
+    shortcut_install.set_defaults(func=command_shortcut_install)
 
     return parser
 
