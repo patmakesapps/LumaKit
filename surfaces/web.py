@@ -12,7 +12,6 @@ import json
 import os
 import sys
 import threading
-import webbrowser
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -63,6 +62,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = _REPO_ROOT / "web"
 WEB_USER_ID = str(OWNER_ID) if OWNER_ID else "web_owner"
 WEB_MEDIA_DIR = get_data_dir() / "web_media"
+WEB_URL = f"http://localhost:{PORT}"
 
 app = FastAPI(title="LumaKit")
 
@@ -365,6 +365,28 @@ def _web_inject_session(text: str) -> None:
     once web supports a durable owner-session model.
     """
     return None
+
+
+def configure_owner() -> None:
+    """Set the owner identity used by the web runtime."""
+    _auth.set_owner(WEB_USER_ID)
+
+
+def register_surface(service: LumaKitService, *, is_owner: bool = True) -> None:
+    """Register the web surface on a shared service instance."""
+    service.register_surface(Surface(
+        name="web",
+        deliver=_web_deliver,
+        inject_session=_web_inject_session,
+        is_owner=is_owner,
+    ))
+
+
+def run_server(*, host: str = "0.0.0.0", port: int = PORT, log_level: str = "warning") -> None:
+    """Run the FastAPI server for the web surface."""
+    print(f"\n=== LumaKit Web UI ===")
+    print(f"Open http://localhost:{port} in your browser\n")
+    uvicorn.run(app, host=host, port=port, log_level=log_level)
 
 
 def _make_agent(ws_id: int, send_fn):
@@ -758,7 +780,7 @@ async def websocket_chat(ws: WebSocket):
 # ---------------------------------------------------------------------------
 
 def main():
-    _auth.set_owner(WEB_USER_ID)
+    configure_owner()
 
     # Web-only deployments run the service here; if Telegram is also configured
     # the Telegram bridge owns the service and this one stays idle so workers
@@ -766,25 +788,11 @@ def main():
     service = None
     if not OWNER_ID:
         service = LumaKitService()
-        service.register_surface(Surface(
-            name="web",
-            deliver=_web_deliver,
-            inject_session=_web_inject_session,
-            is_owner=True,
-        ))
+        register_surface(service, is_owner=True)
         service.start()
 
-    print(f"\n=== LumaKit Web UI ===")
-    print(f"Open http://localhost:{PORT} in your browser\n")
-
-    def open_browser():
-        import time
-        time.sleep(1.5)
-        webbrowser.open(f"http://localhost:{PORT}")
-
-    threading.Thread(target=open_browser, daemon=True).start()
     try:
-        uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
+        run_server()
     finally:
         if service:
             service.stop()

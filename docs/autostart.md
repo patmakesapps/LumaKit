@@ -1,6 +1,9 @@
 # Autostart (systemd)
 
-LumaKit can run automatically on boot via a systemd service.
+LumaKit can run automatically on boot via a systemd service. The service should
+run the unified backend entrypoint, not a single surface.
+
+For the day-to-day launcher commands, see [launcher.md](launcher.md).
 
 ## Setup
 
@@ -39,7 +42,7 @@ LumaKit can run automatically on boot via a systemd service.
 Stop the service first, then run manually as usual:
 ```bash
 sudo systemctl stop lumakit
-python3 main.py
+python3 -m lumakit open
 ```
 
 When done testing, start the service again:

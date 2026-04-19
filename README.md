@@ -6,7 +6,7 @@
 
 LumaKit gives a local LLM a full tool suite — repo ops, shell and Python execution, web search, a headless browser with persistent logins, email, screen capture, and more — and can work autonomously in the background while you live your life. Everything stays on your machine. No OpenAI, no Anthropic, no cloud round-trips. Your model, your data, your rules.
 
-Today, the web UI and Telegram bridge are separate runtime entrypoints. You can run either surface on its own, or run both side by side.
+The recommended runtime is now a single backend entrypoint: `python -m lumakit serve`. The convenience launcher `python -m lumakit open` starts or reuses that backend and opens the web UI. Standalone surface modules still exist for direct debugging.
 
 ---
 
@@ -103,6 +103,34 @@ Copy `.env.example` to `.env` and set the values you want to use.
 
 ## Usage
 
+### Recommended Launcher
+
+Start or reuse the backend and open the web UI:
+
+```bash
+python -m lumakit open
+```
+
+Check status:
+
+```bash
+python -m lumakit status
+```
+
+Stop the backend:
+
+```bash
+python -m lumakit stop
+```
+
+Run the backend in the foreground without opening a browser:
+
+```bash
+python -m lumakit serve
+```
+
+For a short command reference, see [docs/launcher.md](docs/launcher.md).
+
 ### Web UI
 
 ```bash
@@ -120,7 +148,7 @@ The web UI supports:
 - inline reactions on user messages
 - inline delivered screenshots and images
 
-For now, the web UI is a separate runtime from Telegram. If you want both desktop and mobile access at the same time, run both `surfaces.web` and `surfaces.telegram`.
+Direct web-surface launches are useful for debugging, but the normal path is `python -m lumakit open` or `python -m lumakit serve`.
 
 ### CLI
 
@@ -151,7 +179,7 @@ First-time setup: follow [docs/telegram_setup.md](docs/telegram_setup.md) to cre
 python -m surfaces.telegram
 ```
 
-Or run as a systemd service (see [docs/autostart.md](docs/autostart.md)).
+For normal use, prefer the unified backend launcher or run it as a systemd service (see [docs/autostart.md](docs/autostart.md)).
 
 Telegram commands:
 

@@ -123,31 +123,18 @@ def _send_reply(reply, chat_id, user_name, speech_client):
 # Main poll loop
 # ---------------------------------------------------------------------------
 
-def main():
-    if not TOKEN or not ALLOWED_IDS:
-        print("Set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_IDS in .env first.")
-        sys.exit(1)
+def is_configured() -> bool:
+    return bool(TOKEN and ALLOWED_IDS)
 
-    auth.set_owner(OWNER_ID)
-    verbose = "--verbose" in sys.argv
 
-    def telegram_status(msg):
-        chat_id = _active_chat_id["value"]
-        if chat_id:
-            send_message(msg, chat_id=chat_id)
-            try:
-                send_chat_action(chat_id, "typing")
-            except Exception:
-                pass
+def _persist_sessions() -> None:
+    for cid, sess in _sessions.items():
+        if sess["first_message_sent"] and sess["messages"] and len(sess["messages"]) > 1:
+            save_chat(sess["chat_id"], sess["title"], sess["messages"])
+            set_active_chat(str(cid), sess["chat_id"])
 
-    agent = Agent(
-        verbose=verbose,
-        status_callback=telegram_status,
-        check_interrupt=check_for_stop,
-        display=_telegram_display,
-    )
-    speech_client = SpeechClient()
 
+def _register_surface(service: LumaKitService, agent: Agent) -> None:
     # --- Surface wiring: service owns reminders/tasks/heartbeat/email ---
     def telegram_deliver(payload: dict) -> bool:
         content = payload.get("content", "")
@@ -184,14 +171,51 @@ def main():
         save_chat(session["chat_id"], session["title"], session["messages"])
         set_active_chat(str(target), session["chat_id"])
 
-    service = LumaKitService()
     service.register_surface(Surface(
         name="telegram",
         deliver=telegram_deliver,
         inject_session=telegram_inject_session,
         is_owner=True,
     ))
-    service.start()
+
+
+def run(
+    *,
+    service: LumaKitService | None = None,
+    verbose: bool = False,
+    owns_service: bool | None = None,
+    stop_event=None,
+    announce_start: bool = True,
+):
+    if owns_service is None:
+        owns_service = service is None
+
+    if not TOKEN or not ALLOWED_IDS:
+        print("Set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_IDS in .env first.")
+        sys.exit(1)
+
+    auth.set_owner(OWNER_ID)
+
+    def telegram_status(msg):
+        chat_id = _active_chat_id["value"]
+        if chat_id:
+            send_message(msg, chat_id=chat_id)
+            try:
+                send_chat_action(chat_id, "typing")
+            except Exception:
+                pass
+
+    agent = Agent(
+        verbose=verbose,
+        status_callback=telegram_status,
+        check_interrupt=check_for_stop,
+        display=_telegram_display,
+    )
+    speech_client = SpeechClient()
+    service = service or LumaKitService()
+    _register_surface(service, agent)
+    if owns_service:
+        service.start()
 
     _AFFIRM = {"yes", "y", "yep", "yeah", "send", "send it", "do it", "ok", "okay", "sure"}
     _DENY = {"no", "n", "nah", "skip", "cancel", "nope", "don't", "dont"}
@@ -232,21 +256,24 @@ def main():
     except Exception:
         pass
 
-    print(f"Telegram bridge running. {len(ALLOWED_IDS)} authorized user(s).")
+    if announce_start:
+        print(f"Telegram bridge running. {len(ALLOWED_IDS)} authorized user(s).")
 
-    try:
-        send_message("LumaKit is running.", chat_id=OWNER_ID)
-    except Exception:
-        pass
+        try:
+            send_message("LumaKit is running.", chat_id=OWNER_ID)
+        except Exception:
+            pass
 
-    while True:
+    poll_timeout = 5 if stop_event is not None else 30
+
+    while not (stop_event and stop_event.is_set()):
         try:
             if _pending_updates:
                 buffered = _pending_updates[:]
                 _pending_updates.clear()
                 updates = {"result": buffered}
             else:
-                params = {"timeout": 30}
+                params = {"timeout": poll_timeout}
                 if _poll_offset["value"] is not None:
                     params["offset"] = _poll_offset["value"]
                 updates = telegram_api("getUpdates", params)
@@ -398,18 +425,22 @@ def main():
                     print(f"[error] {error_msg}")
 
         except KeyboardInterrupt:
-            for cid, sess in _sessions.items():
-                if sess["first_message_sent"] and sess["messages"] and len(sess["messages"]) > 1:
-                    save_chat(sess["chat_id"], sess["title"], sess["messages"])
-                    set_active_chat(str(cid), sess["chat_id"])
-            service.stop()
-            print("\nBridge stopped.")
             break
         except (socket.timeout, urllib.error.URLError):
             continue
         except Exception as e:
             print(f"[poll error] {e}")
             time.sleep(5)
+
+    _persist_sessions()
+    if owns_service:
+        service.stop()
+    if announce_start:
+        print("\nBridge stopped.")
+
+
+def main():
+    run(verbose="--verbose" in sys.argv)
 
 
 if __name__ == "__main__":
