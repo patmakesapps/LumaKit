@@ -66,15 +66,16 @@ TELEGRAM_ALLOWED_IDS="123456789,987654321"
 
 **Never commit `.env`.** The `.gitignore` already excludes it, but double-check before pushing.
 
-## Step 4 — Start the bridge
+## Step 4 — Start LumaKit
 
 ```bash
-python telegram_bridge.py
+lumakit serve
 ```
 
 You should see:
 
 ```
+Starting LumaKit backend...
 Telegram bridge running. 1 authorized user(s).
 ```
 
@@ -94,13 +95,13 @@ Try a few things:
 
 You have two options:
 
-**Option A — Up front in `.env`:** Add their chat IDs to the comma-separated `TELEGRAM_ALLOWED_IDS` list and restart the bridge.
+**Option A — Up front in `.env`:** Add their chat IDs to the comma-separated `TELEGRAM_ALLOWED_IDS` list and restart LumaKit.
 
 **Option B — At runtime:**
 
 1. Have the new user message your bot from their Telegram. The bridge will refuse them but **queue their ID** as a pending user.
 2. You (the owner) send `/adduser` — LumaKit shows the list of pending requests and lets you approve them one by one.
-3. Approved users are persisted to `.lumakit/users.json` and stay authorized across restarts.
+3. Approved users are persisted to `.lumakit/telegram_users.json` and stay authorized across restarts.
 
 To remove a user, send `/removeuser` as the owner. Owner cannot remove themselves.
 
@@ -160,13 +161,13 @@ Once the bridge is working, you probably want it always-on. See [autostart.md](a
 ## Troubleshooting
 
 **"TELEGRAM_BOT_TOKEN not set"**
-Your `.env` isn't loaded or the token is missing. Check that `.env` lives in the project root and that you restarted the bridge after editing.
+Your `.env` isn't loaded or the token is missing. Check that `.env` lives in the project root and that you restarted LumaKit after editing.
 
 **"Telegram API error: 401 Unauthorized"**
 The bot token is wrong. Re-copy it from @BotFather (`/mybots` → pick your bot → `API Token`).
 
 **You message the bot but get no reply — not even a rejection**
-Verify the bridge is actually running: `ps aux | grep telegram_bridge`. If it's running, tail its output — you should see `[telegram] update from chat_id=…` lines when messages arrive. If nothing shows, Telegram isn't reaching your bridge — check your network and that the bot isn't being used by another process holding the long-poll lock.
+Verify LumaKit is actually running: `lumakit status`. If needed, switch to `lumakit serve` in the foreground and watch the terminal output while messaging the bot.
 
 **"User not authorized"**
 Your chat ID isn't in `TELEGRAM_ALLOWED_IDS` and hasn't been approved via `/adduser`. Either add it to `.env` and restart, or have the owner send `/adduser` from their own chat.
@@ -178,7 +179,7 @@ Check the bridge output for whisper errors. Most common causes: `whisper-cli` bi
 Edge-TTS needs an outbound connection to Microsoft's endpoint. Verify `edge-tts --list-voices` runs from the same Python env as the bridge.
 
 **Bridge crashes with `MultipleBotInstances` or the bot replies twice**
-Two copies of `telegram_bridge.py` are running. Telegram only lets one process long-poll at a time. Kill the stray one.
+Two copies of the Telegram surface are running. Telegram only lets one process long-poll at a time. Stop the stray process and use `lumakit status` / `lumakit stop` to get back to one running backend.
 
 **Commands don't show up in the `/` menu on Telegram**
 Re-run `/setcommands` on @BotFather and paste the list. It can take a minute to propagate to the client.
@@ -204,11 +205,11 @@ Re-run `/setcommands` on @BotFather and paste the list. It can take a minute to 
 
 ## Files involved
 
-- `telegram_bridge.py` — main bridge entry point and poll loop
+- `surfaces/telegram.py` — Telegram surface entrypoint
 - `core/telegram_api.py` — raw Telegram Bot API helpers
 - `core/telegram_io.py` — `send_message`, voice-reply dispatch, polling, owner confirm
 - `core/telegram_commands.py` — slash-command handlers
 - `core/telegram_state.py` — token, allowed IDs, pending users, offset tracker
 - `core/telegram_speech.py` — whisper.cpp + edge-tts helpers
 - `core/telegram_user_config.py` / `core/telegram_owner_config.py` — per-user and owner runtime preferences
-- `.lumakit/users.json` — persisted list of runtime-approved users
+- `.lumakit/telegram_users.json` — persisted list of runtime-approved users
