@@ -44,7 +44,10 @@
             <div id="messages" class="messages">
                 <div id="empty-state" class="empty-state">
                     <img src="/photos/lumakit_cat_logo.png" alt="LumaKit" class="empty-logo">
-                    <p>What can I help you with?</p>
+                    <div class="empty-copy">
+                        <h1 id="empty-headline" class="empty-headline">Give the cat a mission.</h1>
+                        <p id="empty-subcopy" class="empty-subcopy">Ask a question, hand over a task, or start with a command.</p>
+                    </div>
                 </div>
                 <div id="messages-inner" class="messages-inner"></div>
             </div>
@@ -52,7 +55,7 @@
                 <div id="composer" class="composer">
                     <textarea id="input" class="composer-input" placeholder="Message Lumi... (type /stop to interrupt)" rows="1"></textarea>
                     <button id="send-btn" class="composer-btn send-btn" title="Send (type /stop to interrupt)">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+                        <img src="/photos/down_arrow.png" alt="" class="send-btn-icon">
                     </button>
                 </div>
             </div>

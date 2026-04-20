@@ -33,6 +33,8 @@ const $taskList = document.getElementById('task-list');
 const $settingsContent = document.getElementById('settings-content');
 const $setupOverlay = document.getElementById('setup-overlay');
 const $setupOpenSettings = document.getElementById('setup-open-settings');
+const $emptyHeadline = document.getElementById('empty-headline');
+const $emptySubcopy = document.getElementById('empty-subcopy');
 
 // --- State ---
 let isWorking = false;
@@ -52,6 +54,23 @@ const emailDraftCards = new Map();
 let settingsState = null;
 let requiresModelSetup = false;
 let pendingSettingsFocus = false;
+let lastEmptyPromptIndex = -1;
+let emptyStateDismissTimer = null;
+
+const EMPTY_STATE_PROMPTS = [
+    {
+        headline: 'Give the cat a mission.',
+        subcopy: 'Ask a question, hand over a task, or start with a command.',
+    },
+    {
+        headline: 'Summon chaos responsibly.',
+        subcopy: 'Lumi can plan, search, write, and run with tools when you point at the job.',
+    },
+    {
+        headline: 'Cat-powered automation.',
+        subcopy: 'Start with a goal and let the purple creature get to work.',
+    },
+];
 
 // --- Markdown setup ---
 if (window.marked) {
@@ -125,6 +144,38 @@ function clearActivityCard() {
     }
 }
 
+function dismissEmptyState() {
+    if (!$emptyState || $emptyState.classList.contains('hidden')) {
+        exitCenteredMode();
+        return;
+    }
+    if ($emptyState.classList.contains('is-exiting')) return;
+    $emptyState.classList.add('is-exiting');
+    const chatView = document.getElementById('chat-view');
+    chatView.classList.add('empty-state-exiting');
+    if (emptyStateDismissTimer) clearTimeout(emptyStateDismissTimer);
+    emptyStateDismissTimer = setTimeout(() => {
+        $emptyState.classList.add('hidden');
+        $emptyState.classList.remove('is-exiting');
+        chatView.classList.remove('empty-state-exiting');
+        exitCenteredMode();
+        emptyStateDismissTimer = null;
+    }, 220);
+}
+
+function rotateEmptyPrompt() {
+    if (!$emptyHeadline || !$emptySubcopy || EMPTY_STATE_PROMPTS.length === 0) return;
+    let index = Math.floor(Math.random() * EMPTY_STATE_PROMPTS.length);
+    if (EMPTY_STATE_PROMPTS.length > 1 && index === lastEmptyPromptIndex) {
+        index = (index + 1) % EMPTY_STATE_PROMPTS.length;
+    }
+    lastEmptyPromptIndex = index;
+    const prompt = EMPTY_STATE_PROMPTS[index];
+    $emptyHeadline.textContent = prompt.headline;
+    $emptySubcopy.textContent = prompt.subcopy;
+    $emptyHeadline.classList.remove('compact');
+}
+
 function exitCenteredMode() {
     const chatView = document.getElementById('chat-view');
     chatView.classList.remove('chat-view-centered');
@@ -132,13 +183,19 @@ function exitCenteredMode() {
 
 function enterCenteredMode() {
     const chatView = document.getElementById('chat-view');
+    if (emptyStateDismissTimer) {
+        clearTimeout(emptyStateDismissTimer);
+        emptyStateDismissTimer = null;
+    }
+    chatView.classList.remove('empty-state-exiting');
     chatView.classList.add('chat-view-centered');
+    $emptyState?.classList.remove('hidden', 'is-exiting');
+    rotateEmptyPrompt();
 }
 
 function addMessage(role, content) {
     if ($emptyState && !$emptyState.classList.contains('hidden')) {
-        $emptyState.classList.add('hidden');
-        exitCenteredMode();
+        dismissEmptyState();
     }
     removeStatus();
 
@@ -163,8 +220,7 @@ function addMessage(role, content) {
 function ensureActivityCard() {
     if (activityCardEl) return activityCardEl;
     if ($emptyState && !$emptyState.classList.contains('hidden')) {
-        $emptyState.classList.add('hidden');
-        exitCenteredMode();
+        dismissEmptyState();
     }
     removeStatus();
 
