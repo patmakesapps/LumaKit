@@ -364,6 +364,21 @@ body {
     font-size: 15px;
 }
 
+.queued-badge {
+    margin-top: 6px;
+    margin-right: 4px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    opacity: 0.9;
+    animation: fadeIn 0.2s ease;
+}
+
 .message-reaction {
     display: inline-flex;
     align-items: center;
@@ -650,6 +665,111 @@ body {
 @keyframes pulse {
     0%, 100% { opacity: 0.4; }
     50% { opacity: 1; }
+}
+
+/* ===== In-chat activity block ===== */
+
+.activity-message {
+    margin-bottom: 18px;
+}
+
+.activity-bubble {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 4px 0 0;
+    box-shadow: none;
+}
+
+.activity-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.activity-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-light);
+    box-shadow: 0 0 0 6px rgba(176, 124, 216, 0.12);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.activity-title {
+    color: var(--accent-light);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.activity-live {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+
+.activity-log {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.activity-line {
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    padding-left: 14px;
+    position: relative;
+}
+
+.activity-line::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(212, 165, 240, 0.75);
+}
+
+.activity-line.tool {
+    color: var(--text-secondary);
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+}
+
+.activity-line.result::before {
+    background: rgba(74, 222, 128, 0.85);
+}
+
+.activity-line.error {
+    color: #f9b0b0;
+}
+
+.activity-line.error::before {
+    background: rgba(248, 113, 113, 0.92);
+}
+
+.activity-message.done .activity-dot,
+.activity-message.stopped .activity-dot,
+.activity-message.error .activity-dot {
+    animation: none;
+    box-shadow: none;
+}
+
+.activity-message.done .activity-dot {
+    background: var(--success);
+}
+
+.activity-message.stopped .activity-dot {
+    background: var(--warning);
+}
+
+.activity-message.error .activity-dot {
+    background: var(--error);
 }
 
 /* ===== Composer — bottom bar ===== */

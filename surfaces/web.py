@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from agent import Agent
+from core.active_run import classify_runtime_message, format_run_status
 from core import auth as _auth
 from core import email_draft_store
 from core.chat_store import (
@@ -324,29 +325,39 @@ def _tool_detail(tool_name: str, inputs: dict) -> str:
     return ""
 
 
-def _tool_status(tool_name: str, inputs: dict) -> str:
-    """Telegram-style narration for what Lumi is currently doing."""
-    verbs = {
-        "read_file": "Reading",
-        "edit_file": "Editing",
-        "write_file": "Writing",
-        "delete_file": "Deleting",
-        "list_directory": "Listing",
-        "search_files": "Searching",
-        "grep_search": "Searching",
-        "execute_shell": "Running",
-        "execute_python": "Running Python",
-        "web_search": "Searching the web",
-        "fetch_url": "Fetching",
-        "save_memory": "Saving memory",
-        "save_task": "Saving task",
-        "move_path": "Moving",
-    }
-    verb = verbs.get(tool_name, tool_name.replace("_", " "))
-    target = _tool_detail(tool_name, inputs)
-    if target:
-        return f"Lumi is {verb.lower()} {target}..."
-    return f"Lumi is using {verb.lower()}..."
+def _tool_result_summary(tool_name: str, result: dict) -> tuple[str, bool]:
+    if not result.get("success"):
+        return result.get("error", "unknown error"), True
+
+    data = result.get("data", {}) or {}
+    if data.get("skipped"):
+        return "Skipped.", False
+    if tool_name == "browser_automation":
+        failures = [
+            action for action in data.get("actions_performed", [])
+            if isinstance(action, dict) and action.get("status") == "failed"
+        ]
+        if failures:
+            first = failures[0]
+            reason = data.get("blocked_reason") or first.get("blocked_reason") or "failed"
+            selector = first.get("selector")
+            where = f" on {selector}" if selector else ""
+            return f"Blocked ({reason}){where}.", True
+        final_url = data.get("final_url") or data.get("url")
+        if final_url:
+            return f"Finished at {final_url}", False
+        return "Browser task finished.", False
+    if "count" in data:
+        return f"Found {data['count']} result(s).", False
+    if data.get("saved"):
+        return f"Saved item {data.get('id', '?')}.", False
+    if data.get("updated"):
+        return f"Updated item {data.get('id', '?')}.", False
+    if data.get("deleted"):
+        return "Deleted it.", False
+    if data.get("bytes_written"):
+        return f"Wrote {data['bytes_written']} bytes.", False
+    return "Finished that step.", False
 
 
 def _prepare_web_turn(agent: Agent, session: dict):
@@ -471,16 +482,12 @@ def _make_agent(ws_id: int, send_fn):
             "name": tool_name,
             "detail": _ws_tool_ctx[ws_id]["detail"],
         })
-        # Telegram-style narration so the user sees what Lumi is doing
-        send_fn({"type": "status", "text": _tool_status(tool_name, inputs)})
 
     def ws_show_tool_result(result):
         ctx = _ws_tool_ctx.get(ws_id) or {}
         tool_name = ctx.get("tool_name", "")
-        if not result.get("success"):
-            summary = result.get("error", "unknown error")
-            is_error = True
-        else:
+        summary, is_error = _tool_result_summary(tool_name, result)
+        if result.get("success"):
             data = result.get("data", {})
             if (
                 tool_name == "react_to_message"
@@ -492,7 +499,6 @@ def _make_agent(ws_id: int, send_fn):
                     "emoji": data["emoji"],
                 })
                 _ws_tool_ctx.pop(ws_id, None)
-                send_fn({"type": "status", "text": "Lumi is working..."})
                 return
             if (
                 tool_name in {"send_photo_user", "screenshot_user"}
@@ -506,15 +512,7 @@ def _make_agent(ws_id: int, send_fn):
                     "caption": data.get("caption", ""),
                 })
                 _ws_tool_ctx.pop(ws_id, None)
-                send_fn({"type": "status", "text": "Lumi is working..."})
                 return
-            if data.get("skipped"):
-                summary = "skipped"
-            elif "count" in data:
-                summary = f"found {data['count']} result(s)"
-            else:
-                summary = "done"
-            is_error = False
         send_fn({
             "type": "tool_result",
             "name": tool_name,
@@ -522,9 +520,6 @@ def _make_agent(ws_id: int, send_fn):
             "error": is_error,
         })
         _ws_tool_ctx.pop(ws_id, None)
-        # The monkey-patched Spinner is silent, so without an explicit status
-        # the UI looks frozen while the LLM decides what to do next.
-        send_fn({"type": "status", "text": "Lumi is working..."})
 
     # --- Capture the diff onto the pending tool context instead of printing ---
     def ws_show_diff(diff_text: str) -> None:
@@ -576,13 +571,13 @@ def _make_agent(ws_id: int, send_fn):
         show_tool_call=ws_show_tool_call,
         show_tool_result=ws_show_tool_result,
         show_diff=ws_show_diff,
+        status=lambda msg: send_fn({"type": "status", "text": msg}),
         confirm=ws_confirm,
         confirm_email=ws_confirm_email,
     )
 
     agent = Agent(
         verbose="--verbose" in sys.argv,
-        status_callback=lambda msg: send_fn({"type": "status", "text": msg}),
         check_interrupt=lambda: False,
         display=display,
     )
@@ -674,12 +669,17 @@ async def websocket_chat(ws: WebSocket):
                 session["first_message_sent"] = True
             save_chat(session["chat_id"], session["title"], session["messages"])
             set_active_chat(WEB_USER_ID, session["chat_id"])
+            snap = agent.run_controller.get_status_snapshot()
+            run_state = snap.get("state") or "completed"
+            run_error = snap.get("last_error") or ""
             if not ws_closed["v"]:
                 await ws.send_json({
                     "type": "response",
                     "text": reply,
                     "chat_id": session["chat_id"],
                     "title": session["title"],
+                    "run_state": run_state,
+                    "run_error": run_error,
                 })
         except Exception as e:
             if not ws_closed["v"]:
@@ -725,7 +725,7 @@ async def websocket_chat(ws: WebSocket):
 
             # Explicit stop button (legacy — UI now uses /stop instead)
             if msg_type == "stop":
-                agent.interrupt_requested = True
+                agent.request_stop("Stop requested from the web UI.")
                 ev = _ws_confirm_events.get(ws_id)
                 if ev and not ev.is_set():
                     _ws_confirm_results[ws_id] = False
@@ -792,21 +792,37 @@ async def websocket_chat(ws: WebSocket):
                     await ws.send_json(_handle_email_draft_action("discard"))
                     continue
 
-                # Telegram-style /stop: interrupt the current run
-                if text.lower() in ("/stop", "stop"):
-                    agent.interrupt_requested = True
-                    # Unblock any pending confirm so the thread can wind down
-                    ev = _ws_confirm_events.get(ws_id)
-                    if ev and not ev.is_set():
-                        _ws_confirm_results[ws_id] = False
-                        ev.set()
-                    await ws.send_json({"type": "status", "text": "Stopping..."})
-                    continue
-
                 if agent_task and not agent_task.done():
+                    control_kind = classify_runtime_message(text)
+                    if control_kind == "interrupt":
+                        agent.request_stop("Stop requested from the web UI.")
+                        ev = _ws_confirm_events.get(ws_id)
+                        if ev and not ev.is_set():
+                            _ws_confirm_results[ws_id] = False
+                            ev.set()
+                        await ws.send_json({"type": "status", "text": "Stopping..."})
+                        continue
+                    if control_kind == "status_query":
+                        await ws.send_json({
+                            "type": "message",
+                            "text": format_run_status(agent.run_controller.get_status_snapshot()),
+                        })
+                        continue
+                    if control_kind == "guidance":
+                        if agent.run_controller.submit_guidance(text):
+                            await ws.send_json({
+                                "type": "message_queued",
+                                "text": text,
+                            })
+                        else:
+                            await ws.send_json({
+                                "type": "status",
+                                "text": "That guidance arrived too late because the run just finished.",
+                            })
+                        continue
                     await ws.send_json({
                         "type": "status",
-                        "text": "Lumi is still working on the previous message. Wait for the reply or send /stop.",
+                        "text": "Lumi is still working on the previous message. Send stop, ask what I'm doing, or add guidance.",
                     })
                     continue
 
@@ -825,7 +841,7 @@ async def websocket_chat(ws: WebSocket):
         _unregister_web_client(WEB_USER_ID, send_sync)
         # Cancel any in-flight agent task
         if agent_task and not agent_task.done():
-            agent.interrupt_requested = True
+            agent.request_stop("The web client disconnected.")
         # If the agent is blocked on a confirm, unblock it so the thread can exit
         ev = _ws_confirm_events.get(ws_id)
         if ev:

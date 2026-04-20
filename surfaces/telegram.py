@@ -23,6 +23,7 @@ if _user_env.exists():
 load_dotenv()  # repo-root .env — won't override keys already set
 
 from agent import Agent
+from core.active_run import classify_runtime_message, format_run_status
 from core import auth
 from core.chat_store import make_title, save_chat, set_active_chat
 from core.cli import Spinner, show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
@@ -37,7 +38,7 @@ from core.telegram_api import (
     telegram_api,
 )
 from core.telegram_commands import apply_chat_runtime, handle_telegram_command, swap_in
-from core.telegram_io import check_for_stop, send_message, send_tts_reply, telegram_confirm
+from core.telegram_io import send_message, send_tts_reply, telegram_confirm
 from core.telegram_speech import SpeechClient
 from core.telegram_state import (
     ALLOWED_IDS,
@@ -69,39 +70,124 @@ import core.telegram_state as _ts
 _ts._show_tools = _show_tools
 
 
+def _tool_detail(tool_name, inputs):
+    if tool_name in {"read_file", "write_file", "edit_file", "delete_file"}:
+        return inputs.get("path", "")
+    if tool_name == "move_path":
+        return f"{inputs.get('source_path', '?')} -> {inputs.get('destination_path', '?')}"
+    if tool_name == "execute_shell":
+        return (inputs.get("command") or "")[:120]
+    if tool_name == "execute_python":
+        return "python snippet"
+    if tool_name in {"web_search", "fetch_url"}:
+        return (inputs.get("query") or inputs.get("url") or "")[:120]
+    if tool_name == "browser_automation":
+        return (inputs.get("url") or inputs.get("session_id") or "browser task")[:120]
+    return ""
+
+
+def _pretty_tool_name(tool_name):
+    return str(tool_name or "tool").replace("_", " ")
+
+
+def _tool_status(tool_name, inputs):
+    phrases = {
+        "read_file": "Reading",
+        "edit_file": "Editing",
+        "write_file": "Writing",
+        "delete_file": "Deleting",
+        "list_directory": "Listing",
+        "search_file_contents": "Searching",
+        "find_files": "Searching",
+        "execute_shell": "Running",
+        "execute_python": "Running",
+        "web_search": "Searching the web",
+        "fetch_url": "Fetching",
+        "browser_automation": "Working in the browser",
+    }
+    phrase = phrases.get(tool_name, f"Using {_pretty_tool_name(tool_name)}")
+    detail = _tool_detail(tool_name, inputs)
+    if detail:
+        return f"{phrase} {detail}."
+    return f"{phrase}."
+
+
+def _tool_result_summary(tool_name, result):
+    if not result.get("success"):
+        return f"That failed: {result.get('error', 'unknown error')}"
+
+    data = result.get("data", {}) or {}
+    if data.get("skipped"):
+        return "Skipped."
+    if tool_name == "browser_automation":
+        final_url = data.get("final_url") or data.get("url")
+        failures = [
+            action for action in data.get("actions_performed", [])
+            if isinstance(action, dict) and action.get("status") == "failed"
+        ]
+        if failures:
+            first = failures[0]
+            reason = data.get("blocked_reason") or first.get("blocked_reason") or "failed"
+            selector = first.get("selector")
+            target = f" on {selector}" if selector else ""
+            return f"Browser step blocked ({reason}){target}."
+        if final_url:
+            return f"Browser step finished at {final_url}"
+        return "Browser step finished."
+    if "count" in data:
+        return f"Found {data['count']} result(s)."
+    if data.get("saved"):
+        return f"Saved item {data.get('id', '?')}."
+    if data.get("updated"):
+        return f"Updated item {data.get('id', '?')}."
+    if data.get("deleted"):
+        return "Deleted it."
+    if data.get("bytes_written"):
+        return f"Wrote {data['bytes_written']} bytes."
+    return "Finished that step."
+
+
+# Tools whose start is worth announcing on Telegram. Quick reads/listings stay
+# silent so the LLM's own narration carries the conversation.
+_NARRATE_TOOL_START = {
+    "execute_shell",
+    "execute_python",
+    "web_search",
+    "fetch_url",
+    "browser_automation",
+    "instagram_session",
+}
+
+
 def _telegram_show_tool_call(tool_name, inputs):
     _cli_show_tool_call(tool_name, inputs)
     chat_id = _active_chat_id["value"]
-    if chat_id and _show_tools.get(chat_id):
-        detail = ""
-        if "path" in inputs:
-            detail = f" {inputs['path']}"
-        elif "command" in inputs:
-            detail = f" {inputs['command'][:80]}"
-        send_message(f"🔧 [{tool_name}]{detail}", chat_id=chat_id)
+    chat_key = str(chat_id) if chat_id is not None else None
+    if not chat_key or not _show_tools.get(chat_key, True):
+        return
+    if tool_name not in _NARRATE_TOOL_START:
+        return
+    send_message(_tool_status(tool_name, inputs), chat_id=chat_id)
 
 
 def _telegram_show_tool_result(result):
     _cli_show_tool_result(result)
     chat_id = _active_chat_id["value"]
-    if chat_id and _show_tools.get(chat_id):
-        if not result.get("success"):
-            send_message(f"❌ {result.get('error', 'unknown')}", chat_id=chat_id)
-        else:
-            data = result.get("data", {})
-            if data.get("skipped"):
-                send_message("⏭ skipped", chat_id=chat_id)
-            elif "saved" in data:
-                send_message(f"✅ saved (id:{data.get('id', '?')})", chat_id=chat_id)
-            elif "updated" in data:
-                send_message(f"✅ updated (id:{data.get('id', '?')})", chat_id=chat_id)
-            elif "count" in data:
-                send_message(f"📋 found {data['count']} result(s)", chat_id=chat_id)
+    chat_key = str(chat_id) if chat_id is not None else None
+    if not chat_key or not _show_tools.get(chat_key, True):
+        return
+    # Only surface results when something went wrong — successes stay silent so
+    # the LLM's own reply does the talking.
+    if result.get("success") and not (result.get("data") or {}).get("skipped"):
+        return
+    tool_name = result.get("toolName") or result.get("tool_name") or "tool"
+    send_message(_tool_result_summary(tool_name, result), chat_id=chat_id)
 
 
 _telegram_display = DisplayHooks(
     show_tool_call=_telegram_show_tool_call,
     show_tool_result=_telegram_show_tool_result,
+    status=lambda msg: send_message(msg, chat_id=_active_chat_id["value"]) if _active_chat_id["value"] else None,
     confirm=telegram_confirm,
 )
 
@@ -117,6 +203,70 @@ def _send_reply(reply, chat_id, user_name, speech_client):
     else:
         send_message(reply)
     print(f"[Lumi -> {user_name}] {reply[:200]}")
+
+
+def _poll_active_run_messages(agent: Agent) -> bool:
+    """Peek Telegram updates mid-run and route them as control messages."""
+    chat_id = _active_chat_id["value"]
+    if not chat_id:
+        return False
+
+    params = {"timeout": 0}
+    if _poll_offset["value"] is not None:
+        params["offset"] = _poll_offset["value"]
+
+    try:
+        updates = telegram_api("getUpdates", params).get("result", [])
+    except Exception:
+        return agent.run_controller.is_interrupted()
+
+    if not updates:
+        return agent.run_controller.is_interrupted()
+
+    for update in updates:
+        _poll_offset["value"] = update["update_id"] + 1
+        msg = update.get("message", {})
+        msg_chat_id = str(msg.get("chat", {}).get("id", ""))
+        text = msg.get("text", "").strip()
+
+        if not msg_chat_id:
+            continue
+
+        if msg_chat_id != str(chat_id) or not text:
+            _pending_updates.append(update)
+            continue
+
+        kind = classify_runtime_message(text)
+
+        if kind == "interrupt":
+            if agent.run_controller.request_stop("Stop requested from Telegram."):
+                send_message("Stopping...", chat_id=msg_chat_id)
+            continue
+
+        if kind == "status_query":
+            send_message(
+                format_run_status(agent.run_controller.get_status_snapshot()),
+                chat_id=msg_chat_id,
+            )
+            continue
+
+        if text.startswith("/"):
+            _pending_updates.append(update)
+            continue
+
+        if kind == "guidance":
+            if agent.run_controller.submit_guidance(text):
+                send_message(
+                    "Your message will be applied after the current tool call finishes.",
+                    chat_id=msg_chat_id,
+                )
+            else:
+                _pending_updates.append(update)
+            continue
+
+        _pending_updates.append(update)
+
+    return agent.run_controller.is_interrupted()
 
 
 # ---------------------------------------------------------------------------
@@ -196,19 +346,10 @@ def run(
 
     auth.set_owner(OWNER_ID)
 
-    def telegram_status(msg):
-        chat_id = _active_chat_id["value"]
-        if chat_id:
-            send_message(msg, chat_id=chat_id)
-            try:
-                send_chat_action(chat_id, "typing")
-            except Exception:
-                pass
-
+    agent = None
     agent = Agent(
         verbose=verbose,
-        status_callback=telegram_status,
-        check_interrupt=check_for_stop,
+        check_interrupt=lambda: _poll_active_run_messages(agent),
         display=_telegram_display,
     )
     speech_client = SpeechClient()

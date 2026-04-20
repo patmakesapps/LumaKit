@@ -172,7 +172,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         return True
 
     if cmd == "/tools":
-        current = _show_tools.get(str(chat_id), False)
+        current = _show_tools.get(str(chat_id), True)
         _show_tools[str(chat_id)] = not current
         send_message(f"Tool visibility: {'on' if not current else 'off'}")
         return True

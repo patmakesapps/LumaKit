@@ -36,12 +36,14 @@ class DisplayHooks:
         show_tool_call: Callable[[str, dict], None] | None = None,
         show_tool_result: Callable[[dict], None] | None = None,
         show_diff: Callable[[str], None] | None = None,
+        status: Callable[[str], None] | None = None,
         confirm: Callable[[str], bool] | None = None,
         confirm_email: Callable[[dict, str | None], bool] | None = None,
     ):
         self.show_tool_call = show_tool_call or _cli_show_tool_call
         self.show_tool_result = show_tool_result or _cli_show_tool_result
         self.show_diff = show_diff or _cli_show_diff
+        self.status = status or (lambda message: print(message))
         self.confirm = confirm or _cli_confirm
         self.confirm_email = confirm_email or (
             lambda preview, prompt=None: self.confirm(prompt or "Approve this email?")
@@ -68,3 +70,9 @@ def confirm(prompt: str = "Apply this change?") -> bool:
 
 def confirm_email(preview: dict, prompt: str | None = None) -> bool:
     return get_display().confirm_email(preview, prompt)
+
+
+def status(message: str) -> None:
+    if not message:
+        return
+    get_display().status(message)

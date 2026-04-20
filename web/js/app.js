@@ -39,6 +39,11 @@ let isWorking = false;
 let currentView = 'chat';
 let currentChatId = null;
 let statusEl = null;
+let activityCardEl = null;
+let activityTitleEl = null;
+let activityLiveEl = null;
+let activityListEl = null;
+let activityLastText = '';
 // Pending confirm card awaiting a decision (only one at a time)
 let pendingConfirm = null;
 let currentTurnHadRichReply = false;
@@ -107,6 +112,17 @@ function removeStatus() {
     }
 }
 
+function clearActivityCard() {
+    if (activityCardEl) {
+        activityCardEl.remove();
+        activityCardEl = null;
+        activityTitleEl = null;
+        activityLiveEl = null;
+        activityListEl = null;
+        activityLastText = '';
+    }
+}
+
 function exitCenteredMode() {
     const chatView = document.getElementById('chat-view');
     chatView.classList.remove('chat-view-centered');
@@ -139,6 +155,105 @@ function addMessage(role, content) {
     // Highlight code blocks
     if (window.hljs) {
         div.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+    }
+}
+
+function ensureActivityCard() {
+    if (activityCardEl) return activityCardEl;
+    if ($emptyState && !$emptyState.classList.contains('hidden')) {
+        $emptyState.classList.add('hidden');
+        exitCenteredMode();
+    }
+    removeStatus();
+
+    const div = document.createElement('div');
+    div.className = 'message assistant activity-message';
+    div.dataset.role = 'assistant';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble activity-bubble';
+    bubble.innerHTML = `
+        <div class="activity-header">
+            <span class="activity-dot"></span>
+            <span class="activity-title">Lumi is thinking</span>
+        </div>
+        <div class="activity-live">Working through it...</div>
+        <div class="activity-log"></div>
+    `;
+
+    div.appendChild(bubble);
+    $messagesInner.appendChild(div);
+    activityCardEl = div;
+    activityTitleEl = bubble.querySelector('.activity-title');
+    activityLiveEl = bubble.querySelector('.activity-live');
+    activityListEl = bubble.querySelector('.activity-log');
+    scrollToBottom();
+    return div;
+}
+
+function _normalizedForDedupe(text) {
+    return String(text || '')
+        .toLowerCase()
+        .replace(/[\s.…:;!?]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function appendActivityLine(text, kind = 'status') {
+    const value = String(text || '').trim();
+    if (!value) return;
+    ensureActivityCard();
+    const normalized = _normalizedForDedupe(value);
+    const lastNormalized = _normalizedForDedupe(activityLastText);
+    // Drop exact repeats AND substring overlaps so things like
+    // "browser_automation for https://x" immediately followed by
+    // "navigating to https://x" don't show as two lines.
+    if (normalized && lastNormalized) {
+        if (
+            normalized === lastNormalized ||
+            normalized.includes(lastNormalized) ||
+            lastNormalized.includes(normalized)
+        ) {
+            // Keep the richer line visible.
+            const richer = value.length >= activityLastText.length ? value : activityLastText;
+            if (activityLiveEl) activityLiveEl.textContent = richer;
+            if (richer !== activityLastText && activityListEl.lastElementChild) {
+                activityListEl.lastElementChild.textContent = richer;
+                activityLastText = richer;
+            }
+            return;
+        }
+    }
+
+    const line = document.createElement('div');
+    line.className = `activity-line ${kind}`;
+    line.textContent = value;
+    activityListEl.appendChild(line);
+    activityLastText = value;
+
+    while (activityListEl.children.length > 8) {
+        activityListEl.removeChild(activityListEl.firstChild);
+    }
+    if (activityLiveEl) activityLiveEl.textContent = value;
+    scrollToBottom();
+}
+
+function setActivityHeadline(text) {
+    ensureActivityCard();
+    if (activityTitleEl) activityTitleEl.textContent = text;
+    if (activityLiveEl) activityLiveEl.textContent = text;
+    scrollToBottom();
+}
+
+function settleActivityCard(state = 'done') {
+    if (!activityCardEl) return;
+    activityCardEl.classList.remove('active', 'done', 'error', 'stopped');
+    activityCardEl.classList.add(state);
+    if (activityTitleEl) {
+        activityTitleEl.textContent =
+            state === 'error' ? 'Lumi hit a problem'
+            : state === 'stopped' ? 'Lumi stopped'
+            : 'What Lumi did';
     }
 }
 
@@ -375,6 +490,29 @@ function getLastUserMessage() {
     return messages.length ? messages[messages.length - 1] : null;
 }
 
+function markLastUserMessageQueued(text) {
+    // Find the user bubble that matches the queued text (most recent first) —
+    // matching by text is more robust than "last" when several queued messages
+    // are in flight.
+    const target = (text || '').trim();
+    const messages = $messagesInner.querySelectorAll('.message.user');
+    let match = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const bubbleText = messages[i].querySelector('.bubble')?.innerText?.trim() || '';
+        if (!target || bubbleText === target) {
+            match = messages[i];
+            break;
+        }
+    }
+    if (!match) return;
+    if (match.querySelector('.queued-badge')) return;
+    const badge = document.createElement('div');
+    badge.className = 'queued-badge';
+    badge.textContent = 'Queued — will apply after the current step';
+    match.appendChild(badge);
+    scrollToBottom();
+}
+
 function addReactionToLatestUserMessage(emoji) {
     if (!emoji) return;
     const message = getLastUserMessage();
@@ -499,6 +637,7 @@ function clearMessages() {
     $emptyState.classList.remove('hidden');
     enterCenteredMode();
     currentTurnHadRichReply = false;
+    clearActivityCard();
 }
 
 // --- Views ---
@@ -759,13 +898,21 @@ const ws = new WS({
 
     response(data) {
         setWorking(false);
+        const runState = data.run_state || 'completed';
+        const cardState = runState === 'failed' ? 'error'
+            : runState === 'stopped' || runState === 'interrupted' ? 'stopped'
+            : 'done';
+        settleActivityCard(cardState);
         removeStatus();
         const text = (data.text || '').trim();
+        const runError = (data.run_error || '').trim();
         if (text) {
             addMessage('assistant', text);
+        } else if (runState === 'failed' && runError) {
+            addMessage('assistant', `_Run stopped: ${runError}_`);
+        } else if (runState === 'failed') {
+            addMessage('assistant', '_Run stopped before a reply was produced._');
         } else if (!currentTurnHadRichReply) {
-            // Agent finished but produced no text — surface a subtle marker so
-            // the UI doesn't look frozen after a tool-only round.
             addMessage('assistant', '_Done._');
         }
         currentTurnHadRichReply = false;
@@ -778,17 +925,32 @@ const ws = new WS({
     },
 
     status(data) {
-        showStatus(data.text);
+        const text = String(data.text || '').trim();
+        if (!text) return;
+        if (text === 'Lumi is thinking...' || text === 'Lumi is thinking') {
+            setActivityHeadline('Lumi is thinking');
+            return;
+        }
+        if (text === 'Lumi is working...' || text === 'Lumi is working') {
+            setActivityHeadline('Lumi is working');
+            return;
+        }
+        if (text === 'Stopping...') {
+            appendActivityLine('Stopping...', 'status');
+            settleActivityCard('stopped');
+            return;
+        }
+        appendActivityLine(text, 'status');
     },
 
     tool_call(data) {
-        addToolCard(data.name, data.detail);
+        const detail = data.detail ? `: ${data.detail}` : '';
+        appendActivityLine(`Using ${data.name}${detail}`, 'tool');
     },
 
     tool_result(data) {
         if (isInlineToolResult(data)) return;
-        const isError = Boolean(data.error);
-        addToolCard('', data.summary, true, isError);
+        appendActivityLine(data.summary, data.error ? 'error' : 'result');
     },
 
     reaction(data) {
@@ -805,6 +967,10 @@ const ws = new WS({
         addBackgroundMessage(data);
     },
 
+    message_queued(data) {
+        markLastUserMessageQueued(data.text || '');
+    },
+
     reminder(data) {
         const label = data.label || 'Reminder';
         addMessage('assistant', `🔔 ${label}: ${data.text}`);
@@ -816,6 +982,7 @@ const ws = new WS({
 
     error(data) {
         setWorking(false);
+        settleActivityCard('error');
         removeStatus();
         currentTurnHadRichReply = false;
         addMessage('assistant', `Error: ${data.text}`);
@@ -1009,7 +1176,13 @@ function sendMessage() {
         return;
     }
 
-    currentTurnHadRichReply = false;
+    // Only reset the activity card when starting a fresh turn — if the agent
+    // is still working, the user's new message is queued alongside the
+    // existing activity, not starting a new one.
+    if (!isWorking) {
+        currentTurnHadRichReply = false;
+        clearActivityCard();
+    }
     addMessage('user', text);
     ws.send({ type: 'message', text });
     $input.value = '';

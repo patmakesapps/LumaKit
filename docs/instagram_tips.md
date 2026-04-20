@@ -38,6 +38,8 @@ Credentials (username, email, password) live in `lumi/identity.txt` — gitignor
 - DM inbox: `https://www.instagram.com/direct/inbox/`
 - Message requests are at `https://www.instagram.com/direct/requests/`
 - DM threads don't have standard `<a>` links — they use React-based click handlers
+- Use `inspect_interactives` before guessing thread selectors
+- If a thread row exposes clean `x` / `y` coordinates but selector clicks fail, use `click_at`
 
 ### Notifications
 - Navigate directly: `https://www.instagram.com/notifications/`
@@ -46,6 +48,7 @@ Credentials (username, email, password) live in `lumi/identity.txt` — gitignor
 
 ### General Tips
 - **Always use `get_text` first** to understand what's on the page before trying to click
+- **Use `inspect_interactives`** for clickable rows, tabs, modal buttons, and other non-form UI
 - **Use `get_links`** to find post URLs and navigation links
 - **Wait after SPA transitions** — Instagram is a React SPA, so content renders after JS loads
 - **Screenshot often** — send screenshots to Telegram to visually debug when selectors fail

@@ -4,6 +4,7 @@ import os
 import time
 from pathlib import Path
 
+from core.active_run import ActiveRunController, StallWatchdog
 from core.cli import DIM, Spinner, _c
 from core.display import DisplayHooks, use_display
 from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
@@ -54,6 +55,68 @@ def _compact_browser_history(data):
     if not isinstance(data, dict):
         return data
 
+    def _trim_browser_elements(elements):
+        limited_elements = []
+        for element in elements[:TOOL_HISTORY_BROWSER_LIST_LIMIT]:
+            if isinstance(element, dict):
+                trimmed = {}
+                for key in (
+                    "tag",
+                    "type",
+                    "id",
+                    "name",
+                    "placeholder",
+                    "aria_label",
+                    "data_testid",
+                    "text",
+                    "required",
+                    "suggested_selector",
+                    "css_path",
+                    "href",
+                    "role",
+                    "x",
+                    "y",
+                    "width",
+                    "height",
+                    "needs_coordinate_click",
+                    "error",
+                ):
+                    if key not in element:
+                        continue
+                    value = element[key]
+                    if isinstance(value, str):
+                        value = _truncate_text(value, 200)
+                    trimmed[key] = value
+                limited_elements.append(trimmed)
+            else:
+                limited_elements.append(_truncate_text(str(element), 300))
+        return limited_elements
+
+    def _trim_browser_snapshot(snapshot):
+        if not isinstance(snapshot, dict):
+            return snapshot
+        trimmed = {}
+        for key in ("url", "title"):
+            if isinstance(snapshot.get(key), str):
+                trimmed[key] = _truncate_text(snapshot[key], 300)
+        if isinstance(snapshot.get("page_text_snippet"), str):
+            trimmed["page_text_snippet"] = _truncate_text(
+                snapshot["page_text_snippet"], TOOL_HISTORY_BROWSER_TEXT_LIMIT
+            )
+        interactive_elements = snapshot.get("interactive_elements")
+        if isinstance(interactive_elements, list):
+            trimmed["interactive_elements"] = _trim_browser_elements(interactive_elements)
+            if len(interactive_elements) > TOOL_HISTORY_BROWSER_LIST_LIMIT:
+                trimmed["interactive_elements_truncated"] = (
+                    len(interactive_elements) - TOOL_HISTORY_BROWSER_LIST_LIMIT
+                )
+        forms = snapshot.get("forms")
+        if isinstance(forms, list):
+            trimmed["forms"] = _trim_browser_elements(forms)
+            if len(forms) > TOOL_HISTORY_BROWSER_LIST_LIMIT:
+                trimmed["forms_truncated"] = len(forms) - TOOL_HISTORY_BROWSER_LIST_LIMIT
+        return trimmed
+
     compact = dict(data)
     actions = compact.get("actions_performed")
     if isinstance(actions, list):
@@ -88,41 +151,28 @@ def _compact_browser_history(data):
 
             elements = entry.get("elements")
             if isinstance(elements, list):
-                limited_elements = []
-                for element in elements[:TOOL_HISTORY_BROWSER_LIST_LIMIT]:
-                    if isinstance(element, dict):
-                        trimmed = {}
-                        for key in (
-                            "tag",
-                            "type",
-                            "id",
-                            "name",
-                            "placeholder",
-                            "aria_label",
-                            "data_testid",
-                            "text",
-                            "required",
-                            "suggested_selector",
-                            "error",
-                        ):
-                            if key not in element:
-                                continue
-                            value = element[key]
-                            if isinstance(value, str):
-                                value = _truncate_text(value, 200)
-                            trimmed[key] = value
-                        limited_elements.append(trimmed)
-                    else:
-                        limited_elements.append(_truncate_text(str(element), 300))
-                entry["elements"] = limited_elements
-                if len(elements) > len(limited_elements):
-                    entry["elements_truncated"] = len(elements) - len(limited_elements)
+                entry["elements"] = _trim_browser_elements(elements)
+                if len(elements) > len(entry["elements"]):
+                    entry["elements_truncated"] = len(elements) - len(entry["elements"])
+
+            landmarks = entry.get("landmarks")
+            if isinstance(landmarks, list):
+                entry["landmarks"] = landmarks[:TOOL_HISTORY_BROWSER_LIST_LIMIT]
+
+            if isinstance(entry.get("recovery_hint"), str):
+                entry["recovery_hint"] = _truncate_text(entry["recovery_hint"], 300)
+
+            if isinstance(entry.get("recovery_snapshot"), dict):
+                entry["recovery_snapshot"] = _trim_browser_snapshot(entry["recovery_snapshot"])
 
             limited_actions.append(entry)
 
         compact["actions_performed"] = limited_actions
         if len(actions) > len(limited_actions):
             compact["actions_truncated"] = len(actions) - len(limited_actions)
+
+    if isinstance(compact.get("page_observation"), dict):
+        compact["page_observation"] = _trim_browser_snapshot(compact["page_observation"])
 
     for key in ("page_text_snippet", "error"):
         if isinstance(compact.get(key), str):
@@ -198,6 +248,12 @@ def _summarize_large_tool_data(data):
         "final_url",
         "screenshot_path",
         "error",
+        "site",
+        "failed_action_count",
+        "completed_with_failures",
+        "blocked_reason",
+        "blocked_on_step",
+        "skipped_remaining_actions",
     ):
         if key in data:
             summary[key] = _compact_value_for_history(data[key], ("data", key))
@@ -218,6 +274,11 @@ def _summarize_large_tool_data(data):
         summary["actions_performed"] = _compact_browser_history(
             {"actions_performed": actions}
         )["actions_performed"]
+
+    if isinstance(data.get("page_observation"), dict):
+        summary["page_observation"] = _compact_browser_history(
+            {"page_observation": data["page_observation"]}
+        )["page_observation"]
 
     if not summary:
         summary["available_keys"] = list(data.keys())[:20]
@@ -360,15 +421,27 @@ class Agent:
     ROUND_DEADLINE = 120        # seconds per LLM call
     ASK_LLM_TIMEOUT = 300      # overall wall-clock limit (5 min)
 
-    def __init__(self, verbose=False, status_callback=None, check_interrupt=None, display=None):
+    def __init__(self, verbose=False, status_callback=None, check_interrupt=None, display=None,
+                 run_controller=None):
         self.verbose = verbose
-        # Called with (message_text) to send progress updates mid-work
-        self.status_callback = status_callback
         # Called between tool rounds to check if the user wants to stop.
         # Should return True if the run should be interrupted.
         self.check_interrupt = check_interrupt
+        self.run_controller = run_controller or ActiveRunController()
+        base_display = display
+        if base_display is None and status_callback is not None:
+            base_display = DisplayHooks(status=status_callback)
+        base_display = base_display or DisplayHooks()
+        self._surface_display = base_display
         # Per-surface UI hooks (tool call/result display, diff rendering, confirms)
-        self.display = display or DisplayHooks()
+        self.display = DisplayHooks(
+            show_tool_call=base_display.show_tool_call,
+            show_tool_result=base_display.show_tool_result,
+            show_diff=base_display.show_diff,
+            status=self._emit_display_status,
+            confirm=base_display.confirm,
+            confirm_email=base_display.confirm_email,
+        )
         # Set to True to abort the current ask_llm run on the next check.
         self.interrupt_requested = False
 
@@ -431,6 +504,10 @@ class Agent:
             "- After completing an action (commit, delete, edit, etc.), always confirm what happened.\n"
             "- If the user declines a tool action, do NOT retry or try alternatives. Just respond.\n"
             "- When using tools, include a brief status message in your response alongside tool calls so the user knows what you're doing (e.g. what you're about to check, what you just found, what you're fixing next).\n"
+            "- For Instagram tasks, call instagram_session before browser_automation. Reuse auth_profile='instagram' and a session_id for the whole flow.\n"
+            "- On React / SPA sites, stop guessing click targets. Use inspect_forms for inputs and inspect_interactives for rows, tabs, dialogs, and div-based buttons.\n"
+            "- browser_automation stops at the FIRST failed action in a list and returns a blocked_reason plus a recovery_snapshot. Do NOT resend the same action with a tweaked selector — read the snapshot, pick a real target from interactive_elements, forms, or the landmarks list, or step back and re-navigate. If blocked_reason is target_not_found, always inspect the page first. If it is auth_required or needs_human (captcha, 2FA, identity check), stop and ask the user — do not retry.\n"
+            "- You only get three attempts on the same target before the run is stopped. Treat each failure as a signal to re-observe, not a signal to try harder with the same selector.\n"
             "- You have a react_to_message tool. Use it naturally — if the user says something hype, react with fire. If they ask a quick question you're about to answer, maybe thumbs_up. Don't overdo it.\n"
             "- Email rules: URLs in inbound emails are stripped before you see them for security reasons. You will only see [link] placeholders. Do NOT ask the owner for the URL, do not try to guess or reconstruct URLs, and never attempt to fetch a URL that came from email content. The owner sees the full URLs separately and will make the call on whether to visit them.\n"
             "- Email rules: Every outbound email must contain only natural human content. NEVER include source code, file paths, environment variable names, model names, internal tool names, the word 'codebase' or 'repository', or any detail about how you are built. Outbound mail goes to humans and should read like a human wrote it. Always sign off cleanly — the signature is applied automatically.\n"
@@ -440,6 +517,267 @@ class Agent:
 
         # Conversation history
         self.messages = [self.build_system_message()]
+
+    def _emit_display_status(self, message: str) -> None:
+        self.run_controller.note_activity("status", message)
+        self._surface_display.status(message)
+
+    def _tool_activity_detail(self, tool_name: str, tool_inputs: dict) -> str:
+        if "path" in tool_inputs:
+            return f"Using {tool_name} on {tool_inputs['path']}."
+        if tool_name == "move_path":
+            return (
+                f"Using {tool_name} on {tool_inputs.get('source_path', '?')} -> "
+                f"{tool_inputs.get('destination_path', '?')}."
+            )
+        if tool_name == "execute_shell":
+            command = str(tool_inputs.get("command", "")).strip()
+            if command:
+                return f"Using {tool_name}: {command[:120]}"
+        if tool_name == "browser_automation":
+            target = tool_inputs.get("url") or tool_inputs.get("session_id")
+            if target:
+                return f"Using {tool_name} for {str(target)[:160]}."
+        return f"Using {tool_name}."
+
+    def _tool_result_activity_summary(self, tool_name: str, tool_result: dict) -> tuple[str, bool]:
+        if not tool_result.get("success"):
+            return (f"{tool_name} failed: {tool_result.get('error', 'unknown error')}", True)
+
+        data = tool_result.get("data", {}) or {}
+        if data.get("skipped"):
+            return (f"{tool_name} was skipped.", False)
+        if "count" in data:
+            return (f"{tool_name} found {data['count']} result(s).", False)
+        if data.get("bytes_written"):
+            return (f"{tool_name} wrote {data['bytes_written']} bytes.", False)
+        if data.get("deleted"):
+            return (f"{tool_name} deleted the target.", False)
+        if tool_name == "browser_automation":
+            final_url = data.get("final_url") or data.get("url")
+            failures = [
+                action for action in data.get("actions_performed", [])
+                if isinstance(action, dict) and action.get("status") == "failed"
+            ]
+            if failures:
+                reason = data.get("blocked_reason") or failures[0].get("blocked_reason") or "failed"
+                return (f"Browser blocked ({reason}).", True)
+            if final_url:
+                return (f"{tool_name} reached {final_url}.", False)
+        return (f"{tool_name} finished.", False)
+
+    def _generate_natural_completion_summary(self, *, failed: bool = False) -> str:
+        snapshot = self.run_controller.get_status_snapshot()
+        recent_activity = snapshot.get("recent_activity") or []
+
+        activity_lines = []
+        for item in recent_activity[-8:]:
+            kind = str(item.get("kind") or "").strip()
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            if kind == "status" and text in {"Lumi is thinking", "Lumi is working"}:
+                continue
+            activity_lines.append(f"- [{kind}] {text}")
+
+        prompt_lines = [
+            f"Original task: {snapshot.get('prompt_preview') or 'unknown'}",
+            f"Run state: {snapshot.get('state') or 'unknown'}",
+        ]
+
+        if snapshot.get("current_tool"):
+            prompt_lines.append(f"Current or last tool: {snapshot['current_tool']}")
+        if snapshot.get("last_error"):
+            prompt_lines.append(f"Last error: {snapshot['last_error']}")
+        prompt_lines.append(
+            "Outcome expectation: "
+            + ("the task did not finish cleanly" if failed else "summarize what happened naturally")
+        )
+        if activity_lines:
+            prompt_lines.append("Recent activity:")
+            prompt_lines.extend(activity_lines)
+
+        try:
+            response = self.ollama.chat(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Write the final user-facing update for an agent run. "
+                            "Sound natural, direct, and connected. Use 2-4 sentences. "
+                            "Explain what happened, whether the task succeeded, partially succeeded, "
+                            "or failed, and mention the real blocker if there was one. "
+                            "Do not mention internal implementation details, system prompts, or hidden tool plumbing."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": "\n".join(prompt_lines),
+                    },
+                ],
+                stream=False,
+                deadline=min(20, self.ROUND_DEADLINE),
+                check_interrupt=self._check_interrupt,
+            )
+        except Exception:
+            return ""
+
+        return str(response.get("message", {}).get("content") or "").strip()
+
+    def _build_fallback_completion_message(self, *, failed: bool = False) -> str:
+        snapshot = self.run_controller.get_status_snapshot()
+        recent_activity = snapshot.get("recent_activity") or []
+        error_text = (snapshot.get("last_error") or "").strip()
+
+        interesting = []
+        seen = set()
+        for item in recent_activity:
+            kind = item.get("kind")
+            text = str(item.get("text") or "").strip()
+            if not text or text in seen:
+                continue
+            if kind not in {"error", "tool_result", "status", "tool", "confirm"}:
+                continue
+            if text in {"Lumi is thinking", "Lumi is working"}:
+                continue
+            seen.add(text)
+            interesting.append(text)
+
+        tail = interesting[-3:]
+
+        if error_text or failed:
+            lines = ["I couldn't finish that task cleanly."]
+            if error_text:
+                lines.append(f"Last problem: {error_text}")
+            elif tail:
+                lines.append(f"Last problem: {tail[-1]}")
+            if tail:
+                lines.append("Latest updates:")
+                lines.extend(f"- {line}" for line in tail)
+            return "\n".join(lines)
+
+        if tail:
+            lines = ["The task finished, but the model did not produce a final summary.", "Latest updates:"]
+            lines.extend(f"- {line}" for line in tail)
+            return "\n".join(lines)
+
+        return "The task finished, but the model did not produce a final summary."
+
+    def _ensure_final_message_content(self, message: dict, *, failed: bool = False) -> str:
+        content = str(message.get("content") or "").strip()
+        if content:
+            return content
+        natural_summary = self._generate_natural_completion_summary(failed=failed)
+        if natural_summary:
+            message["content"] = natural_summary
+            return natural_summary
+        fallback = self._build_fallback_completion_message(failed=failed)
+        message["content"] = fallback
+        return fallback
+
+    def _reset_attempt_ledger(self) -> None:
+        self._attempt_counts: dict[tuple, int] = {}
+
+    @staticmethod
+    def _normalize_target(value) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return text[:120]
+
+    def _target_signatures(self, tool_name: str, tool_inputs: dict) -> list[tuple]:
+        """Logical targets this tool invocation is trying to act on.
+
+        One signature per sub-action for browser_automation so a list of clicks
+        on different selectors doesn't all count as the same attempt.
+        """
+        if tool_name == "browser_automation":
+            actions = tool_inputs.get("actions") or []
+            sigs: list[tuple] = []
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                action_type = str(action.get("type") or "")
+                if action_type in {"wait", "screenshot", "scroll"}:
+                    continue
+                selector = action.get("selector")
+                if selector:
+                    target = selector
+                elif action.get("x") is not None and action.get("y") is not None:
+                    target = f"{action.get('x')},{action.get('y')}"
+                else:
+                    target = ""
+                sigs.append((
+                    tool_name,
+                    action_type,
+                    self._normalize_target(target),
+                ))
+            if not sigs and tool_inputs.get("url"):
+                sigs.append((tool_name, "navigate", self._normalize_target(tool_inputs["url"])))
+            return sigs
+
+        target = (
+            tool_inputs.get("path")
+            or tool_inputs.get("source_path")
+            or tool_inputs.get("command")
+            or tool_inputs.get("query")
+            or tool_inputs.get("url")
+        )
+        return [(tool_name, "call", self._normalize_target(target))]
+
+    REPEAT_ATTEMPT_LIMIT = 3
+
+    def _register_tool_attempt(self, tool_name: str, tool_inputs: dict) -> tuple | None:
+        """Record this attempt. Returns the signature that hit the limit, or None."""
+        counts = getattr(self, "_attempt_counts", None)
+        if counts is None:
+            counts = {}
+            self._attempt_counts = counts
+        over = None
+        for sig in self._target_signatures(tool_name, tool_inputs):
+            if not sig[-1]:
+                continue
+            counts[sig] = counts.get(sig, 0) + 1
+            if counts[sig] >= self.REPEAT_ATTEMPT_LIMIT and over is None:
+                over = sig
+        return over
+
+    @staticmethod
+    def _mid_text_duplicates_tool(mid_text: str, tool_calls: list) -> bool:
+        """True when the model's narration just restates the tool target."""
+        if not mid_text or not tool_calls:
+            return False
+        stripped = mid_text.strip()
+        # A genuine sentence of narration is usually longer than ~90 chars or
+        # contains multiple clauses. Short "Navigating to X." style lines are
+        # what we want to suppress.
+        if len(stripped) > 140:
+            return False
+        lowered = stripped.lower()
+        for call in tool_calls:
+            args = (call.get("function") or {}).get("arguments") or {}
+            for key in ("url", "path", "source_path", "destination_path", "query"):
+                value = args.get(key)
+                if isinstance(value, str) and value and value.lower() in lowered:
+                    return True
+        return False
+
+    def _apply_pending_guidance(self) -> None:
+        pending = self.run_controller.consume_pending_guidance()
+        if not pending:
+            return
+        guidance_lines = "\n".join(f"- {item}" for item in pending)
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Guidance received while you were working. Continue the same task, "
+                    "do not restart it, and adapt to this guidance:\n"
+                    f"{guidance_lines}"
+                ),
+            }
+        )
 
     def build_system_prompt(self, extra_instructions=None, context_instructions=None):
         prompt = self._system_prompt_prefix
@@ -552,7 +890,13 @@ class Agent:
         if preview and preview.get("diff"):
             # For new file creation, skip the diff and show a simpler confirmation
             if tool_name == "write_file" and preview.get("is_new"):
-                if not self.display.confirm(f"Create {tool_inputs.get('path', 'file')}?"):
+                prompt = f"Create {tool_inputs.get('path', 'file')}?"
+                self.run_controller.mark_confirm_waiting(prompt)
+                try:
+                    approved = self.display.confirm(prompt)
+                finally:
+                    self.run_controller.clear_confirm_waiting()
+                if not approved:
                     return {
                         "success": True,
                         "data": {
@@ -562,7 +906,13 @@ class Agent:
                     }
             else:
                 self.display.show_diff(preview["diff"])
-                if not self.display.confirm("Apply this change?"):
+                prompt = "Apply this change?"
+                self.run_controller.mark_confirm_waiting(prompt)
+                try:
+                    approved = self.display.confirm(prompt)
+                finally:
+                    self.run_controller.clear_confirm_waiting()
+                if not approved:
                     return {
                         "success": True,
                         "data": {
@@ -581,7 +931,13 @@ class Agent:
         """Show what a command/action tool will do and ask for confirmation."""
         reason = tool_inputs.get("reason")
         reason_text = f" — {reason}" if reason else ""
-        if not self.display.confirm(f"Allow {tool_name}?{reason_text}"):
+        prompt = f"Allow {tool_name}?{reason_text}"
+        self.run_controller.mark_confirm_waiting(prompt)
+        try:
+            approved = self.display.confirm(prompt)
+        finally:
+            self.run_controller.clear_confirm_waiting()
+        if not approved:
             return {
                 "success": True,
                 "data": {
@@ -605,7 +961,13 @@ class Agent:
         dest = data.get("destination_path", "?")
         kind = data.get("kind", "item")
 
-        if not self.display.confirm(f"Move {kind} {source} → {dest}?"):
+        prompt = f"Move {kind} {source} → {dest}?"
+        self.run_controller.mark_confirm_waiting(prompt)
+        try:
+            approved = self.display.confirm(prompt)
+        finally:
+            self.run_controller.clear_confirm_waiting()
+        if not approved:
             return {
                 "success": True,
                 "data": {
@@ -620,9 +982,12 @@ class Agent:
 
     def _check_interrupt(self):
         """Returns True if the current run should abort. Also polls the callback."""
+        if self.run_controller.is_interrupted():
+            self.interrupt_requested = True
         if self.check_interrupt:
             try:
                 if self.check_interrupt():
+                    self.run_controller.request_stop()
                     self.interrupt_requested = True
             except Exception:
                 pass
@@ -630,6 +995,11 @@ class Agent:
 
     def _request_interrupt(self):
         """Mark the current run as interrupted."""
+        self.run_controller.request_stop()
+        self.interrupt_requested = True
+
+    def request_stop(self, reason: str = "Stop requested by the user.") -> None:
+        self.run_controller.request_stop(reason)
         self.interrupt_requested = True
 
     def _compact_tool_history(self):
@@ -646,167 +1016,214 @@ class Agent:
         """Produce the stop response and reset the flag."""
         self.interrupt_requested = False
         stop_msg = "Stopped."
+        self.run_controller.finish_run("interrupted", final_message=stop_msg)
         self.messages.append({"role": "assistant", "content": stop_msg})
         return {"message": {"role": "assistant", "content": stop_msg}}
 
     def ask_llm(self, prompt):
         with use_display(self.display), interrupt_context(self._check_interrupt, self._request_interrupt):
-            self.messages.append({"role": "user", "content": prompt})
-            self._compact_tool_history()
-            self._trim_history()
+            self.run_controller.start_run(prompt, kind="chat")
+            watchdog = StallWatchdog(
+                self.run_controller,
+                notify=lambda text: self.display.status(text),
+            )
+            watchdog.start()
 
-            # Clear any stale interrupt from a previous run
-            self.interrupt_requested = False
+            def _finish(response, *, state="completed", final_message="", error=""):
+                watchdog.stop()
+                self.run_controller.finish_run(
+                    state,
+                    final_message=final_message,
+                    error=error,
+                )
+                return response
 
-            tools = self.get_tools_for_llm()
-            start_time = time.monotonic()
-            last_tool_key = None
+            try:
+                self.messages.append({"role": "user", "content": prompt})
+                self._compact_tool_history()
+                self._trim_history()
 
-            for round_num in range(self.MAX_TOOL_ROUNDS + 1):
-                # User-requested stop
-                if self._check_interrupt():
-                    return self._interrupt_response()
+                # Clear any stale interrupt from a previous run
+                self.interrupt_requested = False
 
-                # Wall-clock guard
-                elapsed = time.monotonic() - start_time
-                if elapsed >= self.ASK_LLM_TIMEOUT:
-                    self.messages.append(
-                        {"role": "assistant", "content": "I ran out of time working on that. Please try again or break the task into smaller steps."}
-                    )
-                    return {"message": {"role": "assistant", "content": "I ran out of time working on that. Please try again or break the task into smaller steps."}}
+                tools = self.get_tools_for_llm()
+                start_time = time.monotonic()
+                self._reset_attempt_ledger()
 
-                spinner_msg = "Lumi is thinking" if round_num == 0 else "Lumi is working"
-                spinner = Spinner(spinner_msg).start()
-                try:
-                    remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
-                    deadline = min(self.ROUND_DEADLINE, remaining)
-                    response = self.ollama.chat(
-                        model=self.model,
-                        messages=self.messages,
-                        tools=tools,
-                        stream=False,
-                        deadline=deadline,
-                        check_interrupt=self._check_interrupt,
-                    )
-                except OllamaInterruptedError:
-                    spinner.stop()
-                    return self._interrupt_response()
-                except OllamaConnectionError as e:
-                    spinner.stop()
-                    msg = str(e)
-                    if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
-                        msg = f"Primary model unavailable, using fallback ({self.ollama.last_model_used}). " + msg
-                    self.messages.append({"role": "assistant", "content": msg})
-                    return {"message": {"role": "assistant", "content": msg}}
-                except OllamaTimeoutError:
-                    spinner.stop()
-                    msg = "Ollama stopped responding. Please check that the model is running and try again."
-                    self.messages.append({"role": "assistant", "content": msg})
-                    return {"message": {"role": "assistant", "content": msg}}
-                finally:
-                    spinner.stop()
-
-                # Notify if fallback model was used
-                if (self.ollama.last_model_used
-                        and self.ollama.last_model_used != self.model
-                        and round_num == 0):
-                    print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
-
-                message = response.get("message", {})
-                tool_calls = message.get("tool_calls", [])
-
-                if self.verbose:
-                    label = f"round {round_num}" if tool_calls else "final"
-                    print(f"  [{label}] {json.dumps(message, default=str)[:300]}")
-
-                self.messages.append(message)
-
-                # Surface any text the model included alongside tool calls
-                mid_text = (message.get("content") or "").strip()
-                if mid_text and tool_calls and self.status_callback:
-                    self.status_callback(mid_text)
-
-                if not tool_calls:
-                    # Empty response fix: if the model returned no text after
-                    # working with tools, ask it to summarize what it did
-                    if not mid_text and round_num > 0:
-                        self.messages.append({
-                            "role": "user",
-                            "content": "Summarize what you just did.",
-                        })
-                        try:
-                            spinner = Spinner("Lumi is finishing up").start()
-                            remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
-                            followup = self.ollama.chat(
-                                model=self.model,
-                                messages=self.messages,
-                                stream=False,
-                                deadline=min(self.ROUND_DEADLINE, remaining),
-                                check_interrupt=self._check_interrupt,
-                            )
-                            spinner.stop()
-                            followup_msg = followup.get("message", {})
-                            self.messages.append(followup_msg)
-                            return followup
-                        except OllamaInterruptedError:
-                            spinner.stop()
-                            return self._interrupt_response()
-                        except Exception:
-                            spinner.stop()
-                    return response
-
-                for tool_call in tool_calls:
-                    # Check for stop before every tool call so long sequences
-                    # (like a multi-step browser automation) can be aborted mid-flight.
+                for round_num in range(self.MAX_TOOL_ROUNDS + 1):
+                    # User-requested stop
                     if self._check_interrupt():
                         return self._interrupt_response()
+                    self._apply_pending_guidance()
 
-                    function_data = tool_call.get("function", {})
-                    tool_name = function_data.get("name")
-                    tool_inputs = function_data.get("arguments", {})
+                    # Wall-clock guard
+                    elapsed = time.monotonic() - start_time
+                    if elapsed >= self.ASK_LLM_TIMEOUT:
+                        msg = "I ran out of time working on that. Please try again or break the task into smaller steps."
+                        self.messages.append({"role": "assistant", "content": msg})
+                        return _finish(
+                            {"message": {"role": "assistant", "content": msg}},
+                            state="failed",
+                            error=msg,
+                        )
 
-                    # Loop detection: same tool + same args as last call
-                    tool_key = (tool_name, json.dumps(tool_inputs, sort_keys=True))
-                    if tool_key == last_tool_key:
-                        stuck_msg = f"It looks like I'm stuck repeating the same action ({tool_name}). Let me stop here — could you rephrase or try a different approach?"
-                        self.messages.append({"role": "assistant", "content": stuck_msg})
-                        return {"message": {"role": "assistant", "content": stuck_msg}}
-                    last_tool_key = tool_key
-
-                    self.display.show_tool_call(tool_name, tool_inputs)
-
-                    if tool_name in DIFF_TOOLS:
-                        tool_result = self._handle_diff_tool(tool_name, tool_inputs)
-                    elif tool_name in PREVIEW_TOOLS:
-                        tool_result = self._handle_preview_tool(tool_name, tool_inputs)
-                    elif tool_name in CONFIRM_TOOLS:
-                        tool_result = self._handle_confirm_tool(tool_name, tool_inputs)
-                    else:
-                        tool_result = self.execute_tool(tool_name, tool_inputs)
-
-                    if tool_result.get("interrupted") or self._check_interrupt():
+                    spinner_msg = "Lumi is thinking" if round_num == 0 else "Lumi is working"
+                    spinner = Spinner(spinner_msg).start()
+                    self.run_controller.mark_model_round_start(round_num)
+                    try:
+                        remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
+                        deadline = min(self.ROUND_DEADLINE, remaining)
+                        response = self.ollama.chat(
+                            model=self.model,
+                            messages=self.messages,
+                            tools=tools,
+                            stream=False,
+                            deadline=deadline,
+                            check_interrupt=self._check_interrupt,
+                        )
+                        self.run_controller.mark_model_round_end(round_num)
+                    except OllamaInterruptedError:
+                        self.run_controller.mark_model_round_end(round_num)
+                        spinner.stop()
                         return self._interrupt_response()
+                    except OllamaConnectionError as e:
+                        self.run_controller.mark_model_round_end(round_num)
+                        spinner.stop()
+                        msg = str(e)
+                        if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
+                            msg = f"Primary model unavailable, using fallback ({self.ollama.last_model_used}). " + msg
+                        self.display.status(msg)
+                        self.messages.append({"role": "assistant", "content": msg})
+                        return _finish(
+                            {"message": {"role": "assistant", "content": msg}},
+                            state="failed",
+                            error=msg,
+                        )
+                    except OllamaTimeoutError:
+                        self.run_controller.mark_model_round_end(round_num)
+                        spinner.stop()
+                        msg = "Ollama stopped responding. Please check that the model is running and try again."
+                        self.display.status(msg)
+                        self.messages.append({"role": "assistant", "content": msg})
+                        return _finish(
+                            {"message": {"role": "assistant", "content": msg}},
+                            state="failed",
+                            error=msg,
+                        )
+                    finally:
+                        spinner.stop()
 
-                    self.display.show_tool_result(tool_result)
+                    # Notify if fallback model was used
+                    if (self.ollama.last_model_used
+                            and self.ollama.last_model_used != self.model
+                            and round_num == 0):
+                        print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
+                        self.display.status(
+                            f"Primary model did not respond, so I switched to the fallback model {self.ollama.last_model_used}."
+                        )
 
-                    # Incrementally update code index when files change
-                    if tool_name in ("edit_file", "write_file", "delete_file"):
-                        changed_path = tool_inputs.get("path")
-                        if changed_path and tool_result.get("success"):
-                            self.code_index.update_file(changed_path)
+                    message = response.get("message", {})
+                    tool_calls = message.get("tool_calls", [])
 
                     if self.verbose:
-                        print(f"  [tool result] {json.dumps(tool_result)[:200]}")
+                        label = f"round {round_num}" if tool_calls else "final"
+                        print(f"  [{label}] {json.dumps(message, default=str)[:300]}")
 
-                    self.messages.append(
-                        {
-                            "role": "tool",
-                            "name": tool_name,
-                            "content": compact_tool_result_for_history(tool_name, tool_result),
-                        }
-                    )
+                    self.messages.append(message)
 
-            return response
+                    # Surface any text the model included alongside tool calls,
+                    # unless it's effectively a restatement of the tool target
+                    # the UI is already about to render as a chip.
+                    mid_text = (message.get("content") or "").strip()
+                    if mid_text and tool_calls and not self._mid_text_duplicates_tool(mid_text, tool_calls):
+                        self.display.status(mid_text)
+
+                    if not tool_calls:
+                        final_text = self._ensure_final_message_content(
+                            message,
+                            failed=False,
+                        )
+                        return _finish(response, final_message=final_text)
+
+                    for tool_call in tool_calls:
+                        # Check for stop before every tool call so long sequences
+                        # (like a multi-step browser automation) can be aborted mid-flight.
+                        if self._check_interrupt():
+                            return self._interrupt_response()
+                        self._apply_pending_guidance()
+
+                        function_data = tool_call.get("function", {})
+                        tool_name = function_data.get("name")
+                        tool_inputs = function_data.get("arguments", {})
+
+                        # Semantic loop detection: count attempts per logical
+                        # target, not per exact argument blob. Three tries on
+                        # the same (tool, action, target) → short-circuit.
+                        over_limit = self._register_tool_attempt(tool_name, tool_inputs)
+                        if over_limit is not None:
+                            _, action_type, target = over_limit
+                            target_label = target or "this step"
+                            stuck_msg = (
+                                f"I've tried `{tool_name}` ({action_type}) on "
+                                f"{target_label} {self.REPEAT_ATTEMPT_LIMIT} times "
+                                "and it keeps failing. I'm stopping here so we don't "
+                                "loop — could you take a look or point me at a "
+                                "different approach?"
+                            )
+                            self.display.status(stuck_msg)
+                            self.messages.append({"role": "assistant", "content": stuck_msg})
+                            return _finish(
+                                {"message": {"role": "assistant", "content": stuck_msg}},
+                                state="failed",
+                                error=stuck_msg,
+                            )
+
+                        self.run_controller.mark_tool_start(
+                            tool_name,
+                            self._tool_activity_detail(tool_name, tool_inputs),
+                        )
+                        self.display.show_tool_call(tool_name, tool_inputs)
+
+                        if tool_name in DIFF_TOOLS:
+                            tool_result = self._handle_diff_tool(tool_name, tool_inputs)
+                        elif tool_name in PREVIEW_TOOLS:
+                            tool_result = self._handle_preview_tool(tool_name, tool_inputs)
+                        elif tool_name in CONFIRM_TOOLS:
+                            tool_result = self._handle_confirm_tool(tool_name, tool_inputs)
+                        else:
+                            tool_result = self.execute_tool(tool_name, tool_inputs)
+
+                        if tool_result.get("interrupted") or self._check_interrupt():
+                            return self._interrupt_response()
+
+                        self.display.show_tool_result(tool_result)
+                        summary, is_error = self._tool_result_activity_summary(tool_name, tool_result)
+                        self.run_controller.mark_tool_end(tool_name, summary, error=is_error)
+
+                        # Incrementally update code index when files change
+                        if tool_name in ("edit_file", "write_file", "delete_file"):
+                            changed_path = tool_inputs.get("path")
+                            if changed_path and tool_result.get("success"):
+                                self.code_index.update_file(changed_path)
+
+                        if self.verbose:
+                            print(f"  [tool result] {json.dumps(tool_result)[:200]}")
+
+                        self.messages.append(
+                            {
+                                "role": "tool",
+                                "name": tool_name,
+                                "content": compact_tool_result_for_history(tool_name, tool_result),
+                            }
+                        )
+
+                final_message = response.get("message", {}) if isinstance(response, dict) else {}
+                final_text = self._ensure_final_message_content(final_message, failed=False)
+                return _finish(response, final_message=final_text)
+            except Exception as exc:
+                watchdog.stop()
+                self.run_controller.finish_run("failed", error=str(exc))
+                raise
 
     SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
@@ -819,18 +1236,27 @@ class Agent:
             image_path: Path to an image file on disk.
         """
         with use_display(self.display), interrupt_context(self._check_interrupt, self._request_interrupt):
+            self.run_controller.start_run(prompt or "Image analysis", kind="vision")
             if image_path:
                 path = Path(image_path)
                 if not path.exists():
+                    self.run_controller.finish_run(
+                        "failed", error=f"File not found: {image_path}"
+                    )
                     return {"message": {"role": "assistant",
                                         "content": f"File not found: {image_path}"}}
                 if path.suffix.lower() not in self.SUPPORTED_IMAGE_EXTS:
+                    error_msg = (
+                        f"Unsupported image format: {path.suffix}\n"
+                        f"Supported: {', '.join(sorted(self.SUPPORTED_IMAGE_EXTS))}"
+                    )
+                    self.run_controller.finish_run("failed", error=error_msg)
                     return {"message": {"role": "assistant",
-                                        "content": f"Unsupported image format: {path.suffix}\n"
-                                                    f"Supported: {', '.join(sorted(self.SUPPORTED_IMAGE_EXTS))}"}}
+                                        "content": error_msg}}
                 image_data = path.read_bytes()
 
             if not image_data:
+                self.run_controller.finish_run("failed", error="No image provided.")
                 return {"message": {"role": "assistant",
                                     "content": "No image provided."}}
 
@@ -850,6 +1276,7 @@ class Agent:
             self._trim_history()
 
             spinner = Spinner("Lumi is looking at the image").start()
+            self.run_controller.mark_model_round_start(0)
             try:
                 remaining = self.ASK_LLM_TIMEOUT
                 deadline = min(self.ROUND_DEADLINE, remaining)
@@ -860,20 +1287,27 @@ class Agent:
                     deadline=deadline,
                     check_interrupt=self._check_interrupt,
                 )
+                self.run_controller.mark_model_round_end(0)
             except OllamaInterruptedError:
+                self.run_controller.mark_model_round_end(0)
                 spinner.stop()
                 return self._interrupt_response()
             except OllamaConnectionError as e:
+                self.run_controller.mark_model_round_end(0)
                 spinner.stop()
                 msg = str(e)
                 self.messages.append({"role": "assistant", "content": msg})
+                self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             except OllamaTimeoutError:
+                self.run_controller.mark_model_round_end(0)
                 spinner.stop()
                 msg = "Ollama stopped responding while processing the image."
                 self.messages.append({"role": "assistant", "content": msg})
+                self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             except Exception as e:
+                self.run_controller.mark_model_round_end(0)
                 spinner.stop()
                 error_str = str(e)
                 # Detect vision-not-supported errors from Ollama
@@ -883,6 +1317,7 @@ class Agent:
                 else:
                     msg = f"Error processing image: {error_str}"
                 self.messages.append({"role": "assistant", "content": msg})
+                self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             finally:
                 spinner.stop()
@@ -893,6 +1328,10 @@ class Agent:
 
             message = response.get("message", {})
             self.messages.append(message)
+            final_text = self._ensure_final_message_content(message, failed=False)
+            self.run_controller.finish_run(
+                "completed", final_message=final_text
+            )
             return response
 
     def run_task(self, task_description):

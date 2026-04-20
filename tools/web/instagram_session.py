@@ -39,6 +39,9 @@ quirks, shortcuts — anything that would save time next session.
   `<div role="button">` instead of `<button>`. Prefer `div[role='button']`
   selectors or `:has-text('...')` matchers over `button[...]`. Always call
   inspect_forms before guessing.
+- For DM inbox rows and odd modal controls, call `inspect_interactives` before
+  guessing. If the right target exposes clean coordinates but selector clicks
+  keep failing, use `click_at` with the returned `x` and `y`.
 
 ## Working selectors
 
@@ -85,7 +88,10 @@ def _instagram_session(inputs):
         'notes': notes_path.read_text(encoding='utf-8'),
         'next_step': (
             "Continue with browser_automation, passing auth_profile='instagram'. "
-            'Read the notes above before navigating. Call instagram_session again '
+            'Read the notes above before navigating. Prefer direct Instagram URLs '
+            'for inbox/notifications/profile pages, and use inspect_interactives '
+            'for DM rows or modal actions that are not normal form controls. '
+            'Call instagram_session again '
             "with add_note='<learning>' whenever you discover something new "
             '(a working selector, a quirk, a shortcut) so your future self '
             'skips the rediscovery.'
@@ -107,7 +113,11 @@ def get_instagram_session_tool():
             'any time you discover a working selector, a UI quirk, or a '
             'navigation shortcut. The notes persist across sessions and are '
             're-injected at the start of every Instagram task, so a few '
-            'seconds writing a good note saves minutes every future session.'
+            'seconds writing a good note saves minutes every future session.\n\n'
+            'Instagram hint: for DM rows, modal controls, and other non-form '
+            'click targets, use browser_automation inspect_interactives first. '
+            'If selector clicks still fail, retry with click_at using the '
+            'returned coordinates.'
         ),
         'inputSchema': {
             'type': 'object',
