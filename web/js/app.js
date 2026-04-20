@@ -662,11 +662,37 @@ async function loadChatList() {
         for (const chat of chats) {
             const item = document.createElement('div');
             item.className = `chat-item${chat.id === currentChatId ? ' active' : ''}`;
-            item.textContent = chat.title || 'Untitled';
-            item.onclick = () => {
+
+            const title = document.createElement('span');
+            title.className = 'chat-item-title';
+            title.textContent = chat.title || 'Untitled';
+            title.onclick = () => {
                 ws.send({ type: 'load_chat', chat_id: chat.id });
                 $sidebar.classList.remove('open');
             };
+
+            const del = document.createElement('button');
+            del.className = 'chat-item-delete';
+            del.title = 'Delete chat';
+            del.setAttribute('aria-label', 'Delete chat');
+            del.innerHTML = '&times;';
+            del.onclick = async (e) => {
+                e.stopPropagation();
+                if (!confirm(`Delete "${chat.title || 'Untitled'}"? This can't be undone.`)) return;
+                try {
+                    await fetch(`/api/chats/${encodeURIComponent(chat.id)}`, { method: 'DELETE' });
+                    if (chat.id === currentChatId) {
+                        window.location.reload();
+                        return;
+                    }
+                    loadChatList();
+                } catch (err) {
+                    console.error('Failed to delete chat:', err);
+                }
+            };
+
+            item.appendChild(title);
+            item.appendChild(del);
             $chatList.appendChild(item);
         }
     } catch (e) {
