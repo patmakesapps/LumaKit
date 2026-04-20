@@ -466,11 +466,12 @@ class Agent:
         self.fallback_model = self.default_fallback_model
         self.ollama = OllamaClient(fallback_model=self.fallback_model)
 
-        # Build project context
         root = get_repo_root()
-        project_tree = _build_project_tree(root)
 
-        # Build the tool name list for the system prompt
+        # Build the tool name list for the system prompt. The project tree
+        # used to live in this prompt too — it is now exposed via the
+        # get_project_tree tool so we don't ship thousands of tokens every
+        # turn for chit-chat that never needs it.
         tool_names = ", ".join(sorted(self.registry.tools.keys()))
 
         # Lumi's own email account — surfaced so the LLM knows what to use
@@ -496,7 +497,7 @@ class Agent:
             f"Your tools: {tool_names}\n"
             "ONLY use the tools listed above. Never invent or guess tool names.\n\n"
             f"Current working directory: {root}\n"
-            f"```\n{project_tree}\n```\n\n"
+            "Call get_project_tree when you need a map of the repo.\n\n"
             f"{identity_block}"
             "Rules:\n"
             "- Prefer find_definition, find_usages, get_file_structure, search_symbols, find_imports, and get_call_graph for code questions. Use search_file_contents only for plain text searches.\n"
@@ -743,37 +744,21 @@ class Agent:
                 over = sig
         return over
 
-    @staticmethod
-    def _mid_text_duplicates_tool(mid_text: str, tool_calls: list) -> bool:
-        """True when the model's narration just restates the tool target."""
-        if not mid_text or not tool_calls:
-            return False
-        stripped = mid_text.strip()
-        # A genuine sentence of narration is usually longer than ~90 chars or
-        # contains multiple clauses. Short "Navigating to X." style lines are
-        # what we want to suppress.
-        if len(stripped) > 140:
-            return False
-        lowered = stripped.lower()
-        for call in tool_calls:
-            args = (call.get("function") or {}).get("arguments") or {}
-            for key in ("url", "path", "source_path", "destination_path", "query"):
-                value = args.get(key)
-                if isinstance(value, str) and value and value.lower() in lowered:
-                    return True
-        return False
-
     def _apply_pending_guidance(self) -> None:
         pending = self.run_controller.consume_pending_guidance()
         if not pending:
             return
         guidance_lines = "\n".join(f"- {item}" for item in pending)
+        # Deliver the user's message verbatim inside a thin wrapper. It might
+        # be guidance, a status question, or a request to stop — the model
+        # reads it and decides. We don't bias toward "keep going."
         self.messages.append(
             {
                 "role": "user",
                 "content": (
-                    "Guidance received while you were working. Continue the same task, "
-                    "do not restart it, and adapt to this guidance:\n"
+                    "The user sent this while you were working. Read it and "
+                    "respond appropriately — it may be guidance, a question, "
+                    "or a request to stop:\n"
                     f"{guidance_lines}"
                 ),
             }
@@ -1059,7 +1044,14 @@ class Agent:
                     # Wall-clock guard
                     elapsed = time.monotonic() - start_time
                     if elapsed >= self.ASK_LLM_TIMEOUT:
-                        msg = "I ran out of time working on that. Please try again or break the task into smaller steps."
+                        self.run_controller.note_activity(
+                            "error",
+                            f"Wall-clock limit of {self.ASK_LLM_TIMEOUT}s reached.",
+                        )
+                        msg = self._generate_natural_completion_summary(failed=True) or (
+                            "I ran out of time working on that. Please try again "
+                            "or break the task into smaller steps."
+                        )
                         self.messages.append({"role": "assistant", "content": msg})
                         return _finish(
                             {"message": {"role": "assistant", "content": msg}},
@@ -1133,9 +1125,15 @@ class Agent:
 
                     # Surface any text the model included alongside tool calls,
                     # unless it's effectively a restatement of the tool target
-                    # the UI is already about to render as a chip.
+                    # the UI is already about to render as a chip, or the only
+                    # tool calls are reactions — in which case the mid_text is
+                    # about to become the final reply (see short-circuit below).
                     mid_text = (message.get("content") or "").strip()
-                    if mid_text and tool_calls and not self._mid_text_duplicates_tool(mid_text, tool_calls):
+                    reactions_only_preview = bool(tool_calls) and all(
+                        (tc.get("function", {}) or {}).get("name") == "react_to_message"
+                        for tc in tool_calls
+                    )
+                    if mid_text and tool_calls and not reactions_only_preview:
                         self.display.status(mid_text)
 
                     if not tool_calls:
@@ -1144,6 +1142,12 @@ class Agent:
                             failed=False,
                         )
                         return _finish(response, final_message=final_text)
+
+                    # If every tool call in this round is a side-effect-only
+                    # reaction AND the model already produced text, treat the
+                    # text as the final reply instead of paying for another
+                    # model round-trip just to say the same thing.
+                    short_circuit_final = reactions_only_preview and bool(mid_text)
 
                     for tool_call in tool_calls:
                         # Check for stop before every tool call so long sequences
@@ -1163,14 +1167,19 @@ class Agent:
                         if over_limit is not None:
                             _, action_type, target = over_limit
                             target_label = target or "this step"
-                            stuck_msg = (
+                            incident = (
+                                f"Attempted `{tool_name}` ({action_type}) on "
+                                f"{target_label} {self.REPEAT_ATTEMPT_LIMIT} times "
+                                "without success; stopping to avoid a loop."
+                            )
+                            self.run_controller.note_activity("error", incident)
+                            stuck_msg = self._generate_natural_completion_summary(failed=True) or (
                                 f"I've tried `{tool_name}` ({action_type}) on "
                                 f"{target_label} {self.REPEAT_ATTEMPT_LIMIT} times "
                                 "and it keeps failing. I'm stopping here so we don't "
                                 "loop — could you take a look or point me at a "
                                 "different approach?"
                             )
-                            self.display.status(stuck_msg)
                             self.messages.append({"role": "assistant", "content": stuck_msg})
                             return _finish(
                                 {"message": {"role": "assistant", "content": stuck_msg}},
@@ -1216,6 +1225,17 @@ class Agent:
                                 "content": compact_tool_result_for_history(tool_name, tool_result),
                             }
                         )
+
+                    # React-only round with existing text: finalize without
+                    # another model call. Replace the placeholder content on
+                    # the last assistant turn so transcripts still make sense.
+                    if short_circuit_final:
+                        if self.messages and self.messages[-1 - len(tool_calls)].get("role") == "assistant":
+                            self.messages[-1 - len(tool_calls)]["content"] = mid_text
+                        synthetic = {
+                            "message": {"role": "assistant", "content": mid_text},
+                        }
+                        return _finish(synthetic, final_message=mid_text)
 
                 final_message = response.get("message", {}) if isinstance(response, dict) else {}
                 final_text = self._ensure_final_message_content(final_message, failed=False)

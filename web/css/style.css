@@ -409,21 +409,6 @@ body {
     font-size: 15px;
 }
 
-.queued-badge {
-    margin-top: 6px;
-    margin-right: 4px;
-    padding: 3px 10px;
-    border-radius: 999px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-    opacity: 0.9;
-    animation: fadeIn 0.2s ease;
-}
-
 .message-reaction {
     display: inline-flex;
     align-items: center;

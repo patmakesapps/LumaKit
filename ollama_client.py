@@ -33,9 +33,19 @@ class OllamaClient:
             return max(timeout, self.CLOUD_MODEL_MIN_TIMEOUT)
         return timeout
 
+    # Keep non-cloud models resident in Ollama for this long between calls so
+    # the next turn doesn't pay the cold-load cost. Cloud-hosted models ignore
+    # this field. No tokens generated while idle — pure memory retention.
+    DEFAULT_KEEP_ALIVE = "30m"
+
     def _post(self, model, messages, tools, stream, options=None, request_timeout=None):
         url = f"{self.base_url}/api/chat"
-        payload = {"model": model, "messages": messages, "stream": stream}
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": stream,
+            "keep_alive": self.DEFAULT_KEEP_ALIVE,
+        }
         if tools:
             payload["tools"] = tools
         if options:

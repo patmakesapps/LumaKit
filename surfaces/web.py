@@ -28,7 +28,6 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from agent import Agent
-from core.active_run import classify_runtime_message, format_run_status
 from core import auth as _auth
 from core import email_draft_store
 from core.chat_store import (
@@ -793,37 +792,14 @@ async def websocket_chat(ws: WebSocket):
                     continue
 
                 if agent_task and not agent_task.done():
-                    control_kind = classify_runtime_message(text)
-                    if control_kind == "interrupt":
-                        agent.request_stop("Stop requested from the web UI.")
-                        ev = _ws_confirm_events.get(ws_id)
-                        if ev and not ev.is_set():
-                            _ws_confirm_results[ws_id] = False
-                            ev.set()
-                        await ws.send_json({"type": "status", "text": "Stopping..."})
-                        continue
-                    if control_kind == "status_query":
-                        await ws.send_json({
-                            "type": "message",
-                            "text": format_run_status(agent.run_controller.get_status_snapshot()),
-                        })
-                        continue
-                    if control_kind == "guidance":
-                        if agent.run_controller.submit_guidance(text):
-                            await ws.send_json({
-                                "type": "message_queued",
-                                "text": text,
-                            })
-                        else:
-                            await ws.send_json({
-                                "type": "status",
-                                "text": "That guidance arrived too late because the run just finished.",
-                            })
-                        continue
-                    await ws.send_json({
-                        "type": "status",
-                        "text": "Lumi is still working on the previous message. Send stop, ask what I'm doing, or add guidance.",
-                    })
+                    # Always forward the user's message — let the model read it
+                    # and decide whether it's a stop, a status question, or
+                    # new guidance. No keyword classifier.
+                    if not agent.run_controller.submit_guidance(text):
+                        # Run finished between the check and the submit — fall
+                        # through and treat this as a fresh turn.
+                        await ws.send_json({"type": "status", "text": "Lumi is thinking..."})
+                        agent_task = asyncio.create_task(run_agent_request(text))
                     continue
 
                 await ws.send_json({"type": "status", "text": "Lumi is thinking..."})

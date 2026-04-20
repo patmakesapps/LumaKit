@@ -10,30 +10,6 @@ from threading import Event, RLock, Thread
 from typing import Callable
 
 
-_INTERRUPT_EXACT = {
-    "stop",
-    "/stop",
-    "cancel",
-    "pause",
-    "hold up",
-    "wait stop",
-    "stop please",
-    "pause that",
-}
-
-_STATUS_PATTERNS = (
-    r"\bwhat are you doing\b",
-    r"\bwhere are you(?: at| now)?\b",
-    r"\bdid it work\b",
-    r"\bhow(?:'s| is) it going\b",
-    r"\bstatus\b",
-    r"\bprogress\b",
-    r"\bupdate\b",
-    r"\bstill working\b",
-    r"\bwhat happened\b",
-)
-
-
 @dataclass
 class RunActivity:
     at: float
@@ -48,21 +24,6 @@ class RunActivity:
             "text": self.text,
             "meta": dict(self.meta),
         }
-
-
-def classify_runtime_message(text: str) -> str:
-    """Classify user input received while a run is already active."""
-    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
-    if not normalized:
-        return "ordinary_message"
-
-    if normalized in _INTERRUPT_EXACT or normalized.startswith("/stop"):
-        return "interrupt"
-
-    if any(re.search(pattern, normalized) for pattern in _STATUS_PATTERNS):
-        return "status_query"
-
-    return "guidance"
 
 
 def _preview_text(text: str, limit: int = 220) -> str:
@@ -369,47 +330,3 @@ class StallWatchdog:
             self._notify(notice)
 
 
-def format_run_status(snapshot: dict) -> str:
-    """Render a human-readable answer for 'what are you doing?'."""
-    if not snapshot.get("run_id"):
-        return "I'm not currently working on anything."
-
-    active = snapshot.get("active")
-    state = snapshot.get("state") or "idle"
-    elapsed = snapshot.get("elapsed_seconds")
-    current_tool = snapshot.get("current_tool")
-    current_phase = snapshot.get("current_phase")
-    pending_guidance = snapshot.get("pending_guidance_count") or 0
-    recent_activity = snapshot.get("recent_activity") or []
-    stop_requested = snapshot.get("stop_requested")
-
-    if active and state == "awaiting_confirm":
-        intro = "I'm paused waiting for confirmation."
-    elif active and current_tool:
-        intro = f"I'm still working. Right now I'm in `{current_tool}`."
-    elif active and current_phase == "model":
-        intro = "I'm still working and thinking through the next step."
-    elif state == "completed":
-        intro = "That run finished."
-    elif state == "failed":
-        intro = "That run failed."
-    elif state == "interrupted" or stop_requested:
-        intro = "A stop was requested and the run is winding down."
-    else:
-        intro = f"Run state: {state}."
-
-    lines = [intro]
-    if elapsed:
-        lines.append(f"Elapsed: {elapsed}s.")
-    if pending_guidance:
-        lines.append(f"Queued guidance waiting to be applied: {pending_guidance}.")
-
-    if recent_activity:
-        lines.append("Recent activity:")
-        for item in recent_activity[-4:]:
-            lines.append(f"- {item.get('text', '')}")
-
-    if active:
-        lines.append("You can send `stop` to interrupt or send guidance while I work.")
-
-    return "\n".join(lines)

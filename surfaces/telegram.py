@@ -23,7 +23,6 @@ if _user_env.exists():
 load_dotenv()  # repo-root .env — won't override keys already set
 
 from agent import Agent
-from core.active_run import classify_runtime_message, format_run_status
 from core import auth
 from core.chat_store import make_title, save_chat, set_active_chat
 from core.cli import Spinner, show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
@@ -236,35 +235,16 @@ def _poll_active_run_messages(agent: Agent) -> bool:
             _pending_updates.append(update)
             continue
 
-        kind = classify_runtime_message(text)
-
-        if kind == "interrupt":
-            if agent.run_controller.request_stop("Stop requested from Telegram."):
-                send_message("Stopping...", chat_id=msg_chat_id)
-            continue
-
-        if kind == "status_query":
-            send_message(
-                format_run_status(agent.run_controller.get_status_snapshot()),
-                chat_id=msg_chat_id,
-            )
-            continue
-
+        # Slash commands are still handled by the command dispatcher.
         if text.startswith("/"):
             _pending_updates.append(update)
             continue
 
-        if kind == "guidance":
-            if agent.run_controller.submit_guidance(text):
-                send_message(
-                    "Your message will be applied after the current tool call finishes.",
-                    chat_id=msg_chat_id,
-                )
-            else:
-                _pending_updates.append(update)
-            continue
-
-        _pending_updates.append(update)
+        # Always forward the user's message — the model reads it and decides
+        # whether it's a stop, a status question, or new guidance. No keyword
+        # classifier sitting in front of the LLM.
+        if not agent.run_controller.submit_guidance(text):
+            _pending_updates.append(update)
 
     return agent.run_controller.is_interrupted()
 

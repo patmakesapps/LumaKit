@@ -236,7 +236,7 @@ function appendActivityLine(text, kind = 'status') {
     while (activityListEl.children.length > 8) {
         activityListEl.removeChild(activityListEl.firstChild);
     }
-    if (activityLiveEl) activityLiveEl.textContent = value;
+    if (activityLiveEl) activityLiveEl.style.display = 'none';
     scrollToBottom();
 }
 
@@ -490,29 +490,6 @@ function addBackgroundMessage(data) {
 function getLastUserMessage() {
     const messages = $messagesInner.querySelectorAll('.message.user');
     return messages.length ? messages[messages.length - 1] : null;
-}
-
-function markLastUserMessageQueued(text) {
-    // Find the user bubble that matches the queued text (most recent first) —
-    // matching by text is more robust than "last" when several queued messages
-    // are in flight.
-    const target = (text || '').trim();
-    const messages = $messagesInner.querySelectorAll('.message.user');
-    let match = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const bubbleText = messages[i].querySelector('.bubble')?.innerText?.trim() || '';
-        if (!target || bubbleText === target) {
-            match = messages[i];
-            break;
-        }
-    }
-    if (!match) return;
-    if (match.querySelector('.queued-badge')) return;
-    const badge = document.createElement('div');
-    badge.className = 'queued-badge';
-    badge.textContent = 'Queued — will apply after the current step';
-    match.appendChild(badge);
-    scrollToBottom();
 }
 
 function addReactionToLatestUserMessage(emoji) {
@@ -1059,10 +1036,6 @@ const ws = new WS({
 
     message(data) {
         addBackgroundMessage(data);
-    },
-
-    message_queued(data) {
-        markLastUserMessageQueued(data.text || '');
     },
 
     reminder(data) {
