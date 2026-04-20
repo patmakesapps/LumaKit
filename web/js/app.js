@@ -51,6 +51,7 @@ let notificationPollTimer = null;
 const emailDraftCards = new Map();
 let settingsState = null;
 let requiresModelSetup = false;
+let pendingSettingsFocus = false;
 
 // --- Markdown setup ---
 if (window.marked) {
@@ -95,8 +96,9 @@ function applySetupState() {
     $newChatBtn.disabled = blocked;
     if (blocked) {
         $input.placeholder = 'Choose a model in Settings before chatting...';
-        $setupOverlay.classList.remove('hidden');
-        if (currentView !== 'settings') {
+        const viewingSettings = currentView === 'settings';
+        $setupOverlay.classList.toggle('hidden', viewingSettings);
+        if (!viewingSettings) {
             switchView('settings');
         }
     } else {
@@ -651,6 +653,7 @@ function switchView(view) {
 
     if (view === 'task') loadTasks();
     if (view === 'settings') loadSettings();
+    applySetupState();
 }
 
 // --- Chat list ---
@@ -812,6 +815,14 @@ async function loadSettings() {
         const $settingsForm = document.getElementById('settings-form');
         const $resetModelSettings = document.getElementById('reset-model-settings');
 
+        if (pendingSettingsFocus) {
+            pendingSettingsFocus = false;
+            requestAnimationFrame(() => {
+                $primaryModelInput?.focus();
+                $primaryModelInput?.select();
+            });
+        }
+
         $installedModelsSelect?.addEventListener('change', () => {
             if ($installedModelsSelect.value) {
                 $primaryModelInput.value = $installedModelsSelect.value;
@@ -826,11 +837,23 @@ async function loadSettings() {
                 loadSettingsError('Choose a primary model or set OLLAMA_MODEL in .env first.');
                 return;
             }
-            await saveSettings({ primary_model, fallback_model });
+            await saveSettings(
+                { primary_model, fallback_model },
+                {
+                    successMessage: `Saved model settings. Using ${primary_model || settings.env_primary_model}.`,
+                    busyLabel: 'Saving...',
+                },
+            );
         });
 
         $resetModelSettings?.addEventListener('click', async () => {
-            await saveSettings({ primary_model: '', fallback_model: '' });
+            await saveSettings(
+                { primary_model: '', fallback_model: '' },
+                {
+                    successMessage: 'Reset model settings to .env defaults.',
+                    busyLabel: 'Resetting...',
+                },
+            );
         });
 
         applySetupState();
@@ -842,15 +865,57 @@ async function loadSettings() {
 }
 
 function loadSettingsError(message) {
-    const existing = $settingsContent.querySelector('.settings-error-inline');
-    if (existing) existing.remove();
-    const error = document.createElement('p');
-    error.className = 'settings-error settings-error-inline';
-    error.textContent = message;
-    $settingsContent.prepend(error);
+    showSettingsNotice('error', message);
 }
 
-async function saveSettings(payload) {
+function clearSettingsNotice() {
+    const existing = $settingsContent.querySelector('.settings-notice-inline');
+    if (existing) existing.remove();
+}
+
+function showSettingsNotice(kind, message) {
+    clearSettingsNotice();
+    const notice = document.createElement('div');
+    notice.className = `settings-notice settings-notice-inline ${kind === 'error' ? 'error' : 'success'}`;
+    notice.textContent = message;
+    $settingsContent.prepend(notice);
+}
+
+function setSettingsBusy(busy, label = 'Saving...') {
+    const $saveButton = $settingsContent.querySelector('.settings-btn.primary');
+    const $resetButton = $settingsContent.querySelector('#reset-model-settings');
+    const $settingsInputs = $settingsContent.querySelectorAll('.settings-input, .settings-select');
+
+    if ($saveButton) {
+        if (!$saveButton.dataset.defaultLabel) {
+            $saveButton.dataset.defaultLabel = $saveButton.textContent;
+        }
+        $saveButton.classList.toggle('is-busy', busy);
+        $saveButton.innerHTML = busy
+            ? `<span class="button-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`
+            : escapeHtml($saveButton.dataset.defaultLabel);
+        $saveButton.disabled = busy;
+    }
+
+    if ($resetButton) {
+        if (!$resetButton.dataset.defaultLabel) {
+            $resetButton.dataset.defaultLabel = $resetButton.textContent;
+        }
+        $resetButton.classList.toggle('is-busy', busy);
+        $resetButton.innerHTML = busy
+            ? '<span class="button-spinner" aria-hidden="true"></span><span>Working...</span>'
+            : escapeHtml($resetButton.dataset.defaultLabel);
+        $resetButton.disabled = busy;
+    }
+
+    $settingsInputs.forEach(input => {
+        input.disabled = busy;
+    });
+}
+
+async function saveSettings(payload, { successMessage = 'Model settings saved.', busyLabel = 'Saving...' } = {}) {
+    clearSettingsNotice();
+    setSettingsBusy(true, busyLabel);
     try {
         const res = await fetch('/api/settings', {
             method: 'POST',
@@ -860,8 +925,11 @@ async function saveSettings(payload) {
         if (!res.ok) throw new Error('save failed');
         await loadSettings();
         await loadHealth();
+        showSettingsNotice('success', successMessage);
     } catch (e) {
         loadSettingsError('Failed to save settings.');
+    } finally {
+        setSettingsBusy(false);
     }
 }
 
@@ -1245,7 +1313,10 @@ $sidebarToggle.onclick = () => {
 // Navigation
 $navTasks.onclick = () => switchView('task');
 $navSettings.onclick = () => switchView('settings');
-$setupOpenSettings.onclick = () => switchView('settings');
+$setupOpenSettings.onclick = () => {
+    pendingSettingsFocus = true;
+    switchView('settings');
+};
 
 // Click outside sidebar to close on mobile
 document.addEventListener('click', (e) => {

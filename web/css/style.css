@@ -1413,7 +1413,31 @@ body {
     flex-wrap: wrap;
 }
 
+.settings-notice {
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.settings-notice.success {
+    border: 1px solid rgba(74, 222, 128, 0.32);
+    background: rgba(74, 222, 128, 0.09);
+    color: var(--text-primary);
+}
+
+.settings-notice.error {
+    border: 1px solid rgba(248, 113, 113, 0.32);
+    background: rgba(248, 113, 113, 0.09);
+    color: var(--text-primary);
+}
+
 .settings-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
     border: 0;
     border-radius: 999px;
     padding: 10px 16px;
@@ -1438,6 +1462,25 @@ body {
     border: 1px solid var(--border);
 }
 
+.settings-btn:disabled {
+    cursor: default;
+    opacity: 0.82;
+    transform: none;
+}
+
+.settings-btn.is-busy {
+    min-width: 122px;
+}
+
+.button-spinner {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.28);
+    border-top-color: currentColor;
+    animation: buttonSpin 0.75s linear infinite;
+}
+
 .settings-banner {
     padding: 14px 16px;
     border-radius: var(--radius-sm);
@@ -1451,6 +1494,12 @@ body {
 .settings-error {
     color: var(--error);
     font-size: 13px;
+}
+
+@keyframes buttonSpin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .setup-overlay {

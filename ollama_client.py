@@ -16,6 +16,8 @@ class OllamaInterruptedError(Exception):
 
 
 class OllamaClient:
+    CLOUD_MODEL_MIN_TIMEOUT = 240
+
     def __init__(self, base_url="http://localhost:11434", request_timeout=120,
                  fallback_model=None):
         self.base_url = base_url.rstrip("/")
@@ -24,6 +26,13 @@ class OllamaClient:
         # Tracks which model was actually used in the last call
         self.last_model_used = None
 
+    def _resolve_timeout(self, model, request_timeout=None):
+        timeout = request_timeout if request_timeout is not None else self.request_timeout
+        model_name = str(model or "").strip().lower()
+        if model_name.endswith(":cloud"):
+            return max(timeout, self.CLOUD_MODEL_MIN_TIMEOUT)
+        return timeout
+
     def _post(self, model, messages, tools, stream, options=None, request_timeout=None):
         url = f"{self.base_url}/api/chat"
         payload = {"model": model, "messages": messages, "stream": stream}
@@ -31,7 +40,7 @@ class OllamaClient:
             payload["tools"] = tools
         if options:
             payload["options"] = options
-        timeout = request_timeout if request_timeout is not None else self.request_timeout
+        timeout = self._resolve_timeout(model, request_timeout)
         response = requests.post(url, json=payload, timeout=timeout)
         response.raise_for_status()
         return response.json()
@@ -39,7 +48,7 @@ class OllamaClient:
     def _post_with_fallback(self, model, messages, tools, stream, options=None,
                             request_timeout=None):
         """Try primary model, falling back on timeout/connection failure."""
-        timeout = request_timeout if request_timeout is not None else self.request_timeout
+        timeout = self._resolve_timeout(model, request_timeout)
         try:
             result = self._post(
                 model, messages, tools, stream, options, request_timeout=timeout
@@ -50,16 +59,17 @@ class OllamaClient:
                 raise OllamaTimeoutError(
                     f"Ollama did not respond within {timeout}s"
                 ) from e
+            fallback_timeout = self._resolve_timeout(self.fallback_model, request_timeout)
             try:
                 result = self._post(
                     self.fallback_model, messages, tools, stream, options,
-                    request_timeout=timeout,
+                    request_timeout=request_timeout,
                 )
                 return result, self.fallback_model
             except requests.Timeout as fallback_error:
                 raise OllamaTimeoutError(
-                    f"Ollama did not respond within {timeout}s for either "
-                    f"primary ({model}) or fallback ({self.fallback_model})."
+                    f"Ollama did not respond within {timeout}s for primary ({model}) "
+                    f"or within {fallback_timeout}s for fallback ({self.fallback_model})."
                 ) from fallback_error
             except (requests.ConnectionError, ConnectionRefusedError, OSError):
                 raise OllamaConnectionError(
@@ -74,15 +84,16 @@ class OllamaClient:
                     f"Make sure Ollama is running."
                 ) from e
             # Try fallback
+            fallback_timeout = self._resolve_timeout(self.fallback_model, request_timeout)
             try:
                 result = self._post(
                     self.fallback_model, messages, tools, stream, options,
-                    request_timeout=timeout,
+                    request_timeout=request_timeout,
                 )
                 return result, self.fallback_model
             except requests.Timeout as fallback_error:
                 raise OllamaTimeoutError(
-                    f"Ollama did not respond within {timeout}s for fallback "
+                    f"Ollama did not respond within {fallback_timeout}s for fallback "
                     f"({self.fallback_model}) after primary ({model}) failed to connect."
                 ) from fallback_error
             except (requests.ConnectionError, ConnectionRefusedError, OSError):
