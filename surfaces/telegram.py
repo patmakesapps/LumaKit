@@ -27,7 +27,7 @@ from core import auth
 from core.chat_store import make_title, save_chat, set_active_chat
 from core.cli import Spinner, show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
 from core.display import DisplayHooks
-from core.identity import chat_owner_id
+from core.identity import OWNER_USER_ID, chat_owner_id
 from core import email_draft_store
 from core.interface_context import set_interface
 from core.service import LumaKitService, Surface
@@ -361,6 +361,8 @@ def _register_surface(service: LumaKitService, agent: Agent) -> None:
         label = payload.get("label") or ""
         text = f"🔔 {label}: {content}" if label else content
         chat_id = payload.get("chat_id")
+        if str(chat_id or "") == OWNER_USER_ID:
+            chat_id = OWNER_ID
         if chat_id:
             send_message(text, chat_id=chat_id)
             print(f"[{label.lower() or 'notify'} -> {chat_id}] {content[:200]}")

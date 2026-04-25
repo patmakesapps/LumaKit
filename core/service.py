@@ -13,6 +13,7 @@ from typing import Callable
 from core import auth, notifications
 from core.email_checker import EmailChecker
 from core.heartbeat import Heartbeat
+from core.identity import chat_owner_id
 from core.reminder_checker import ReminderChecker
 from core.runtime_config import get_effective_config_for_user
 from core.task_runner import TaskRunner
@@ -152,20 +153,28 @@ class LumaKitService:
         self._started = True
 
         def on_reminder(reminder):
-            # Family reminders (no chat_id) broadcast to everyone.
-            target = "both" if reminder.get("chat_id") is None else "auto"
+            # Reminders always fan out across registered user-facing surfaces:
+            # web + Telegram when both are configured, regardless of where the
+            # reminder was created.
+            target = "both"
             label = "Family reminder" if reminder.get("chat_id") is None else "Reminder"
+            web_user_id = (
+                None
+                if reminder.get("chat_id") is None
+                else chat_owner_id(reminder.get("chat_id"))
+            )
             # Log first so a missed ping is recoverable on whichever surface
             # the user opens next.
             notification_id = notifications.log(
                 content=reminder["content"],
                 label=label,
-                user_id=reminder.get("chat_id"),
+                user_id=web_user_id,
             )
             return self.router.route({
                 "content": reminder["content"],
                 "label": label,
                 "chat_id": reminder.get("chat_id"),
+                "web_user_id": web_user_id,
                 "target": target,
                 "notification_id": notification_id,
             })

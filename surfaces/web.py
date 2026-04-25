@@ -405,15 +405,18 @@ def _web_deliver(payload: dict) -> bool:
     if not content:
         return False
     label = payload.get("label") or ""
-    chat_id = str(payload.get("chat_id") or WEB_USER_ID)
+    web_user_id = payload.get("web_user_id")
+    chat_id = str(web_user_id or payload.get("chat_id") or WEB_USER_ID)
     with _web_clients_lock:
-        if payload.get("chat_id") is None and not label:
+        if label and web_user_id is None:
+            callbacks = [cb for clients in _web_clients.values() for cb in clients]
+        elif label:
+            callbacks = list(_web_clients.get(chat_id, set()))
+        elif payload.get("chat_id") is None:
             # Owner-targeted (heartbeat/email): prefer owner's clients.
             callbacks = list(_web_clients.get(str(WEB_USER_ID), set()))
             if not callbacks:
                 callbacks = [cb for clients in _web_clients.values() for cb in clients]
-        elif payload.get("chat_id") is None:
-            callbacks = [cb for clients in _web_clients.values() for cb in clients]
         else:
             callbacks = list(_web_clients.get(chat_id, set()))
 
