@@ -3,6 +3,14 @@ import threading
 import requests
 
 
+# Local Ollama is much more reliable when this process sends one generation
+# request at a time. Foreground chat, background tasks, heartbeat, and memory
+# tooling all share the same daemon, so uncoordinated concurrent calls can
+# fail or thrash model loads. Serialize chat requests process-wide and let
+# callers wait their turn.
+_OLLAMA_CHAT_SLOT = threading.Lock()
+
+
 class OllamaTimeoutError(Exception):
     """Raised when an Ollama request exceeds its deadline."""
 
@@ -37,6 +45,21 @@ class OllamaClient:
     # the next turn doesn't pay the cold-load cost. Cloud-hosted models ignore
     # this field. No tokens generated while idle — pure memory retention.
     DEFAULT_KEEP_ALIVE = "30m"
+
+    def _acquire_chat_slot(self, check_interrupt=None):
+        while True:
+            acquired = _OLLAMA_CHAT_SLOT.acquire(timeout=0.1)
+            if acquired:
+                return
+            if not check_interrupt:
+                continue
+            try:
+                if check_interrupt():
+                    raise OllamaInterruptedError("Interrupted by /stop.")
+            except OllamaInterruptedError:
+                raise
+            except Exception:
+                continue
 
     def _post(self, model, messages, tools, stream, options=None, request_timeout=None):
         url = f"{self.base_url}/api/chat"
@@ -119,21 +142,32 @@ class OllamaClient:
         self.last_model_used = None
         timeout = self.request_timeout if deadline is None else max(1, float(deadline))
         if not check_interrupt:
-            result, used_model = self._post_with_fallback(
-                model, messages, tools, stream, options, request_timeout=timeout
-            )
-            self.last_model_used = used_model
-            return result
+            self._acquire_chat_slot()
+            try:
+                result, used_model = self._post_with_fallback(
+                    model, messages, tools, stream, options, request_timeout=timeout
+                )
+                self.last_model_used = used_model
+                return result
+            finally:
+                _OLLAMA_CHAT_SLOT.release()
 
         outcome = {}
         done = threading.Event()
 
         def _run_request():
+            acquired = False
             try:
-                result, used_model = self._post_with_fallback(
-                    model, messages, tools, stream, options,
-                    request_timeout=timeout,
-                )
+                self._acquire_chat_slot(check_interrupt=check_interrupt)
+                acquired = True
+                try:
+                    result, used_model = self._post_with_fallback(
+                        model, messages, tools, stream, options,
+                        request_timeout=timeout,
+                    )
+                finally:
+                    if acquired:
+                        _OLLAMA_CHAT_SLOT.release()
                 outcome["result"] = result
                 outcome["used_model"] = used_model
             except Exception as exc:
