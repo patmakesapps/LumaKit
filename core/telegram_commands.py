@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat, set_active_chat
+from core.identity import chat_owner_id
 from core.runtime_config import apply_user_runtime, get_owner_effective_config
 from core.telegram_io import poll_for_reply, send_message
 from core.telegram_state import (
@@ -33,7 +34,7 @@ def swap_in(agent, session):
 
 def resume_chat(chat_id_str, agent, session, telegram_chat_id=None):
     """Load a saved conversation into the agent."""
-    owner_id = str(telegram_chat_id) if telegram_chat_id else None
+    owner_id = chat_owner_id(telegram_chat_id) if telegram_chat_id else None
     chat = load_chat(chat_id_str, owner_id=owner_id)
     if not chat:
         send_message(f"Chat '{chat_id_str}' not found.")
@@ -46,7 +47,7 @@ def resume_chat(chat_id_str, agent, session, telegram_chat_id=None):
     session["title"] = chat["title"]
     session["first_message_sent"] = True
     if telegram_chat_id:
-        set_active_chat(str(telegram_chat_id), chat["id"])
+        set_active_chat(owner_id, chat["id"])
     send_message(f"Resumed: {chat['title']} ({len(chat['messages'])} messages)")
 
 
@@ -202,7 +203,8 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         return True
 
     if cmd == "/chats":
-        chats = list_chats(limit=20, owner_id=str(chat_id))
+        owner_id = chat_owner_id(chat_id)
+        chats = list_chats(limit=20, owner_id=owner_id)
         if not chats:
             send_message("No saved conversations.")
             return True
@@ -229,15 +231,16 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         return True
 
     if cmd == "/new":
+        owner_id = chat_owner_id(chat_id)
         if session["first_message_sent"] and len(agent.messages) > 1:
-            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=str(chat_id))
+            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=owner_id)
         session["chat_id"] = new_chat_id()
         session["title"] = ""
         session["first_message_sent"] = False
         system_msg = agent.messages[0] if agent.messages else None
         agent.messages = [system_msg] if system_msg else []
         session["messages"] = agent.messages
-        set_active_chat(str(chat_id), session["chat_id"])
+        set_active_chat(owner_id, session["chat_id"])
         send_message("New conversation started.")
         return True
 
@@ -247,7 +250,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         msg_count = len(agent.messages)
         model = agent.model or "not set"
         fallback = agent.fallback_model or "not set"
-        chat_count = len(list_chats(limit=100, owner_id=str(chat_id)))
+        chat_count = len(list_chats(limit=100, owner_id=chat_owner_id(chat_id)))
         user_count = len(ALLOWED_IDS)
         owner_suffix = ""
         if str(chat_id) == str(OWNER_ID):

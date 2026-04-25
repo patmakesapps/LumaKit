@@ -43,6 +43,7 @@ from core.chat_store import (
 from core import notifications as notification_log
 from core.cli import Spinner
 from core.display import DisplayHooks
+from core.identity import WEB_USER_ID
 from core.interface_context import set_interface
 from core.paths import get_data_dir
 from core.runtime_config import apply_user_runtime, get_effective_config_for_user
@@ -62,7 +63,6 @@ Spinner.stop = lambda self: None
 PORT = int(os.getenv("LUMAKIT_WEB_PORT", "7865"))
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = _REPO_ROOT / "web"
-WEB_USER_ID = str(OWNER_ID) if OWNER_ID else "web_owner"
 WEB_MEDIA_DIR = get_data_dir() / "web_media"
 WEB_URL = f"http://localhost:{PORT}"
 

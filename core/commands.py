@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from core.chat_store import delete_chat, list_chats, load_chat, make_title, new_chat_id, save_chat
+from core.identity import CLI_USER_ID
 from core.cli import BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW, _c, render_storage_meter
 from core.menu import select_menu
 
@@ -54,7 +55,7 @@ def cmd_help(args: str, agent, session: dict):
 
 
 def cmd_chats(args: str, agent, session: dict):
-    owner_id = session.get("owner_id", "cli")
+    owner_id = session.get("owner_id", CLI_USER_ID)
     chats = list_chats(limit=20, owner_id=owner_id)
     if not chats:
         print(_c(DIM, "  No saved conversations.\n"))
@@ -85,7 +86,7 @@ def cmd_chats(args: str, agent, session: dict):
 
 
 def _chats_resume(chat_id: str, agent, session: dict):
-    chat = load_chat(chat_id, owner_id=session.get("owner_id", "cli"))
+    chat = load_chat(chat_id, owner_id=session.get("owner_id", CLI_USER_ID))
     if not chat:
         print(_c(RED, f"  Conversation '{chat_id}' not found."))
         return
@@ -139,7 +140,7 @@ def cmd_status(args: str, agent, session: dict):
     msg_count = len(agent.messages)
     model = agent.model or "not set"
     fallback = agent.fallback_model or "not set"
-    chat_count = len(list_chats(limit=100, owner_id=session.get("owner_id", "cli")))
+    chat_count = len(list_chats(limit=100, owner_id=session.get("owner_id", CLI_USER_ID)))
 
     print(f"""
 {_c(BOLD, '  LumaKit Status')}
@@ -253,4 +254,4 @@ def _auto_save(agent, session: dict):
     chat_id = session.get("chat_id", "")
     title = session.get("title", "Untitled")
     if len(agent.messages) > 1:
-        save_chat(chat_id, title, agent.messages, owner_id=session.get("owner_id", "cli"))
+        save_chat(chat_id, title, agent.messages, owner_id=session.get("owner_id", CLI_USER_ID))

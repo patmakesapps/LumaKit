@@ -27,6 +27,7 @@ from core import auth
 from core.chat_store import make_title, save_chat, set_active_chat
 from core.cli import Spinner, show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
 from core.display import DisplayHooks
+from core.identity import chat_owner_id
 from core import email_draft_store
 from core.interface_context import set_interface
 from core.service import LumaKitService, Surface
@@ -346,8 +347,9 @@ def is_configured() -> bool:
 def _persist_sessions() -> None:
     for cid, sess in _sessions.items():
         if sess["first_message_sent"] and sess["messages"] and len(sess["messages"]) > 1:
-            save_chat(sess["chat_id"], sess["title"], sess["messages"], owner_id=str(cid))
-            set_active_chat(str(cid), sess["chat_id"])
+            owner_id = chat_owner_id(cid)
+            save_chat(sess["chat_id"], sess["title"], sess["messages"], owner_id=owner_id)
+            set_active_chat(owner_id, sess["chat_id"])
 
 
 def _register_surface(service: LumaKitService, agent: Agent) -> None:
@@ -384,8 +386,9 @@ def _register_surface(service: LumaKitService, agent: Agent) -> None:
         if not session["first_message_sent"]:
             session["title"] = make_title(text)
             session["first_message_sent"] = True
-        save_chat(session["chat_id"], session["title"], session["messages"], owner_id=str(target))
-        set_active_chat(str(target), session["chat_id"])
+        owner_id = chat_owner_id(target)
+        save_chat(session["chat_id"], session["title"], session["messages"], owner_id=owner_id)
+        set_active_chat(owner_id, session["chat_id"])
 
     service.register_surface(Surface(
         name="telegram",
@@ -550,8 +553,9 @@ def run(
                             session["title"] = make_title(caption or "Photo")
                             session["first_message_sent"] = True
                         if session["first_message_sent"] and len(agent.messages) > 1:
-                            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=str(chat_id))
-                            set_active_chat(chat_id, session["chat_id"])
+                            owner_id = chat_owner_id(chat_id)
+                            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=owner_id)
+                            set_active_chat(owner_id, session["chat_id"])
                     except Exception as e:
                         error_msg = f"Error processing photo: {e}"
                         send_message(error_msg)
@@ -592,8 +596,9 @@ def run(
                             session["title"] = make_title(transcript)
                             session["first_message_sent"] = True
                         if session["first_message_sent"] and len(agent.messages) > 1:
-                            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=str(chat_id))
-                            set_active_chat(chat_id, session["chat_id"])
+                            owner_id = chat_owner_id(chat_id)
+                            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=owner_id)
+                            set_active_chat(owner_id, session["chat_id"])
                     except Exception as e:
                         error_msg = f"Error processing audio: {e}"
                         send_message(error_msg)
@@ -624,8 +629,9 @@ def run(
                         session["title"] = make_title(text)
                         session["first_message_sent"] = True
                     if session["first_message_sent"] and len(agent.messages) > 1:
-                        save_chat(session["chat_id"], session["title"], agent.messages, owner_id=str(chat_id))
-                        set_active_chat(chat_id, session["chat_id"])
+                        owner_id = chat_owner_id(chat_id)
+                        save_chat(session["chat_id"], session["title"], agent.messages, owner_id=owner_id)
+                        set_active_chat(owner_id, session["chat_id"])
                 except Exception as e:
                     error_msg = f"Error: {e}"
                     send_message(error_msg)

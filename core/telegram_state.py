@@ -6,6 +6,7 @@ import json
 import os
 
 from core.paths import get_data_dir
+from core.identity import chat_owner_id
 from core.telegram_owner_config import load_owner_config, save_owner_config
 from core.telegram_user_config import load_user_configs, save_user_configs
 from core.chat_store import get_active_chat, load_chat, new_chat_id
@@ -34,8 +35,9 @@ def _save_users_file(ids):
     os.replace(tmp, USERS_FILE)
 
 
-ALLOWED_IDS = _env_ids | _load_users_file()
-OWNER_ID = _env_id_list[0] if _env_id_list else None
+_file_ids = _load_users_file()
+ALLOWED_IDS = _env_ids | _file_ids
+OWNER_ID = _env_id_list[0] if _env_id_list else (sorted(_file_ids)[0] if _file_ids else None)
 OWNER_CONFIG = load_owner_config()
 USER_CONFIGS = load_user_configs()
 
@@ -64,13 +66,14 @@ def _save_allowed_ids():
 
 def _get_session(chat_id):
     chat_id = str(chat_id)
+    owner_id = chat_owner_id(chat_id)
     if chat_id not in _sessions:
         # Cross-surface resume: if this user has an active chat from web/another
         # surface, pick it up here so the conversation feels continuous.
         resumed = None
-        active_id = get_active_chat(chat_id)
+        active_id = get_active_chat(owner_id)
         if active_id:
-            resumed = load_chat(active_id, owner_id=chat_id)
+            resumed = load_chat(active_id, owner_id=owner_id)
         if resumed:
             _sessions[chat_id] = {
                 "chat_id": resumed["id"],

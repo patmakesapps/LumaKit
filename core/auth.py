@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
+from core.identity import OWNER_USER_ID
+
 
 _active_user: ContextVar[str | None] = ContextVar("lumakit_active_user", default=None)
 _owner = {"value": None}
@@ -34,4 +36,8 @@ def is_owner_active():
     """True if the current active user is the owner. False otherwise."""
     owner = _owner["value"]
     active = _active_user.get()
-    return owner is not None and active is not None and owner == active
+    if active is None:
+        return False
+    if active == OWNER_USER_ID:
+        return True
+    return owner is not None and owner == active

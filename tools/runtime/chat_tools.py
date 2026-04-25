@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from core import chat_store
+from core.identity import chat_owner_id
 from tools.memory.memory_tools import _get_active_user
 
 
 def _active_owner_id() -> str | None:
     active = _get_active_user()
-    return str(active) if active is not None else None
+    return chat_owner_id(active) if active is not None else None
 
 
 def _coerce_limit(value, default: int, maximum: int) -> int:

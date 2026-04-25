@@ -10,13 +10,12 @@ import sys
 import tempfile
 
 from agent import Agent
-from core.chat_store import make_title, new_chat_id, save_chat
+from core.chat_store import get_active_chat, load_chat, make_title, new_chat_id, save_chat, set_active_chat
 from core.cli import render_storage_meter
 from core.commands import handle_command
+from core.identity import CLI_USER_ID
 from core.service import LumaKitService, Surface
 from tools.memory.memory_tools import set_active_user as set_memory_active_user
-
-CLI_USER_ID = "cli"
 
 
 def grab_clipboard_image():
@@ -73,12 +72,26 @@ def main():
     ))
     service.start()
 
-    session = {
-        "chat_id": new_chat_id(),
-        "owner_id": CLI_USER_ID,
-        "title": "",
-        "first_message_sent": False,
-    }
+    resumed = None
+    active_id = get_active_chat(CLI_USER_ID)
+    if active_id:
+        resumed = load_chat(active_id, owner_id=CLI_USER_ID)
+    if resumed:
+        agent.messages = resumed["messages"]
+        session = {
+            "chat_id": resumed["id"],
+            "owner_id": CLI_USER_ID,
+            "title": resumed["title"],
+            "first_message_sent": True,
+        }
+    else:
+        session = {
+            "chat_id": new_chat_id(),
+            "owner_id": CLI_USER_ID,
+            "title": "",
+            "first_message_sent": False,
+        }
+    set_active_chat(CLI_USER_ID, session["chat_id"])
 
     print("\n=== LumaKit CLI ===")
     health = agent.storage.check_health()
@@ -93,6 +106,7 @@ def main():
         except (EOFError, KeyboardInterrupt):
             if session["first_message_sent"] and len(agent.messages) > 1:
                 save_chat(session["chat_id"], session["title"], agent.messages, owner_id=CLI_USER_ID)
+                set_active_chat(CLI_USER_ID, session["chat_id"])
             service.stop()
             print("\nGoodbye.")
             break
@@ -100,6 +114,7 @@ def main():
         if user_input.lower() in ("exit", "quit"):
             if session["first_message_sent"] and len(agent.messages) > 1:
                 save_chat(session["chat_id"], session["title"], agent.messages, owner_id=CLI_USER_ID)
+                set_active_chat(CLI_USER_ID, session["chat_id"])
             service.stop()
             print("Goodbye.")
             break
@@ -125,6 +140,7 @@ def main():
                         session["first_message_sent"] = True
                     if session["first_message_sent"] and len(agent.messages) > 1:
                         save_chat(session["chat_id"], session["title"], agent.messages, owner_id=CLI_USER_ID)
+                        set_active_chat(CLI_USER_ID, session["chat_id"])
                 except Exception as e:
                     print(f"\nError: {e}\n")
                 continue
@@ -146,6 +162,7 @@ def main():
                         session["first_message_sent"] = True
                     if session["first_message_sent"] and len(agent.messages) > 1:
                         save_chat(session["chat_id"], session["title"], agent.messages, owner_id=CLI_USER_ID)
+                        set_active_chat(CLI_USER_ID, session["chat_id"])
                 except Exception as e:
                     print(f"\nError: {e}\n")
                 continue
@@ -165,6 +182,7 @@ def main():
 
             if session["first_message_sent"] and len(agent.messages) > 1:
                 save_chat(session["chat_id"], session["title"], agent.messages, owner_id=CLI_USER_ID)
+                set_active_chat(CLI_USER_ID, session["chat_id"])
 
             milestone = agent.storage.check_milestone()
             if milestone:
