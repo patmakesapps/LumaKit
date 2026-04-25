@@ -33,12 +33,13 @@ def swap_in(agent, session):
 
 def resume_chat(chat_id_str, agent, session, telegram_chat_id=None):
     """Load a saved conversation into the agent."""
-    chat = load_chat(chat_id_str)
+    owner_id = str(telegram_chat_id) if telegram_chat_id else None
+    chat = load_chat(chat_id_str, owner_id=owner_id)
     if not chat:
         send_message(f"Chat '{chat_id_str}' not found.")
         return
     if session["first_message_sent"] and len(agent.messages) > 1:
-        save_chat(session["chat_id"], session["title"], agent.messages)
+        save_chat(session["chat_id"], session["title"], agent.messages, owner_id=owner_id)
     agent.messages = chat["messages"]
     session["messages"] = agent.messages
     session["chat_id"] = chat["id"]
@@ -201,7 +202,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         return True
 
     if cmd == "/chats":
-        chats = list_chats(limit=20)
+        chats = list_chats(limit=20, owner_id=str(chat_id))
         if not chats:
             send_message("No saved conversations.")
             return True
@@ -229,7 +230,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
 
     if cmd == "/new":
         if session["first_message_sent"] and len(agent.messages) > 1:
-            save_chat(session["chat_id"], session["title"], agent.messages)
+            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=str(chat_id))
         session["chat_id"] = new_chat_id()
         session["title"] = ""
         session["first_message_sent"] = False
@@ -246,7 +247,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         msg_count = len(agent.messages)
         model = agent.model or "not set"
         fallback = agent.fallback_model or "not set"
-        chat_count = len(list_chats(limit=100))
+        chat_count = len(list_chats(limit=100, owner_id=str(chat_id)))
         user_count = len(ALLOWED_IDS)
         owner_suffix = ""
         if str(chat_id) == str(OWNER_ID):

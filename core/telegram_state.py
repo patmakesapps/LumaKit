@@ -70,7 +70,7 @@ def _get_session(chat_id):
         resumed = None
         active_id = get_active_chat(chat_id)
         if active_id:
-            resumed = load_chat(active_id)
+            resumed = load_chat(active_id, owner_id=chat_id)
         if resumed:
             _sessions[chat_id] = {
                 "chat_id": resumed["id"],

@@ -22,7 +22,7 @@ if _user_env.exists():
     load_dotenv(_user_env)
 load_dotenv()  # repo-root .env — won't override keys already set
 
-from agent import Agent
+from agent import Agent, timestamp_message
 from core import auth
 from core.chat_store import make_title, save_chat, set_active_chat
 from core.cli import Spinner, show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
@@ -260,7 +260,7 @@ def is_configured() -> bool:
 def _persist_sessions() -> None:
     for cid, sess in _sessions.items():
         if sess["first_message_sent"] and sess["messages"] and len(sess["messages"]) > 1:
-            save_chat(sess["chat_id"], sess["title"], sess["messages"])
+            save_chat(sess["chat_id"], sess["title"], sess["messages"], owner_id=str(cid))
             set_active_chat(str(cid), sess["chat_id"])
 
 
@@ -294,11 +294,11 @@ def _register_surface(service: LumaKitService, agent: Agent) -> None:
                     extra_instructions=_get_user_config(target).get("personality_prompt") or None
                 )
             ]
-        session["messages"].append({"role": "assistant", "content": text})
+        session["messages"].append(timestamp_message({"role": "assistant", "content": text}))
         if not session["first_message_sent"]:
             session["title"] = make_title(text)
             session["first_message_sent"] = True
-        save_chat(session["chat_id"], session["title"], session["messages"])
+        save_chat(session["chat_id"], session["title"], session["messages"], owner_id=str(target))
         set_active_chat(str(target), session["chat_id"])
 
     service.register_surface(Surface(
@@ -464,7 +464,7 @@ def run(
                             session["title"] = make_title(caption or "Photo")
                             session["first_message_sent"] = True
                         if session["first_message_sent"] and len(agent.messages) > 1:
-                            save_chat(session["chat_id"], session["title"], agent.messages)
+                            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=str(chat_id))
                             set_active_chat(chat_id, session["chat_id"])
                     except Exception as e:
                         error_msg = f"Error processing photo: {e}"
@@ -506,7 +506,7 @@ def run(
                             session["title"] = make_title(transcript)
                             session["first_message_sent"] = True
                         if session["first_message_sent"] and len(agent.messages) > 1:
-                            save_chat(session["chat_id"], session["title"], agent.messages)
+                            save_chat(session["chat_id"], session["title"], agent.messages, owner_id=str(chat_id))
                             set_active_chat(chat_id, session["chat_id"])
                     except Exception as e:
                         error_msg = f"Error processing audio: {e}"
@@ -538,7 +538,7 @@ def run(
                         session["title"] = make_title(text)
                         session["first_message_sent"] = True
                     if session["first_message_sent"] and len(agent.messages) > 1:
-                        save_chat(session["chat_id"], session["title"], agent.messages)
+                        save_chat(session["chat_id"], session["title"], agent.messages, owner_id=str(chat_id))
                         set_active_chat(chat_id, session["chat_id"])
                 except Exception as e:
                     error_msg = f"Error: {e}"

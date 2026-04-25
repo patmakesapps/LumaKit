@@ -54,7 +54,8 @@ def cmd_help(args: str, agent, session: dict):
 
 
 def cmd_chats(args: str, agent, session: dict):
-    chats = list_chats(limit=20)
+    owner_id = session.get("owner_id", "cli")
+    chats = list_chats(limit=20, owner_id=owner_id)
     if not chats:
         print(_c(DIM, "  No saved conversations.\n"))
         return
@@ -80,11 +81,11 @@ def cmd_chats(args: str, agent, session: dict):
     if result.get("action") == "select":
         _chats_resume(result["chat_id"], agent, session)
     elif result.get("action") == "delete":
-        _chats_delete(result["chat_id"])
+        _chats_delete(result["chat_id"], owner_id=owner_id)
 
 
 def _chats_resume(chat_id: str, agent, session: dict):
-    chat = load_chat(chat_id)
+    chat = load_chat(chat_id, owner_id=session.get("owner_id", "cli"))
     if not chat:
         print(_c(RED, f"  Conversation '{chat_id}' not found."))
         return
@@ -102,10 +103,10 @@ def _chats_resume(chat_id: str, agent, session: dict):
     print(_c(DIM, f"  {len(chat['messages'])} messages loaded.\n"))
 
 
-def _chats_delete(chat_id: str):
-    chat = load_chat(chat_id)
+def _chats_delete(chat_id: str, owner_id: str | None = None):
+    chat = load_chat(chat_id, owner_id=owner_id)
     title = chat["title"] if chat else chat_id
-    if delete_chat(chat_id):
+    if delete_chat(chat_id, owner_id=owner_id):
         print(_c(GREEN, f"  Deleted: {title}"))
     else:
         print(_c(RED, f"  Conversation '{chat_id}' not found."))
@@ -138,7 +139,7 @@ def cmd_status(args: str, agent, session: dict):
     msg_count = len(agent.messages)
     model = agent.model or "not set"
     fallback = agent.fallback_model or "not set"
-    chat_count = len(list_chats(limit=100))
+    chat_count = len(list_chats(limit=100, owner_id=session.get("owner_id", "cli")))
 
     print(f"""
 {_c(BOLD, '  LumaKit Status')}
@@ -252,4 +253,4 @@ def _auto_save(agent, session: dict):
     chat_id = session.get("chat_id", "")
     title = session.get("title", "Untitled")
     if len(agent.messages) > 1:
-        save_chat(chat_id, title, agent.messages)
+        save_chat(chat_id, title, agent.messages, owner_id=session.get("owner_id", "cli"))

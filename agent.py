@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 from core.active_run import ActiveRunController, StallWatchdog
@@ -42,6 +43,17 @@ TOOL_HISTORY_DICT_LIMIT = 60
 TOOL_HISTORY_BROWSER_LIST_LIMIT = 25
 TOOL_HISTORY_BROWSER_ACTION_LIMIT = 12
 TOOL_HISTORY_BROWSER_TEXT_LIMIT = 2000
+
+
+def timestamp_message(message: dict) -> dict:
+    """Add a creation timestamp to saved transcript messages."""
+    if not isinstance(message, dict):
+        return message
+    stamped = dict(message)
+    role = stamped.get("role")
+    if role != "system" and not stamped.get("timestamp"):
+        stamped["timestamp"] = datetime.now().isoformat()
+    return stamped
 
 
 def _truncate_text(value, limit):
@@ -501,7 +513,7 @@ class Agent:
             f"{identity_block}"
             "Rules:\n"
             "- Prefer find_definition, find_usages, get_file_structure, search_symbols, find_imports, and get_call_graph for code questions. Use search_file_contents only for plain text searches.\n"
-            "- Use recall to check memory when the user asks about something you might have saved. When the user wants to add to or change something already saved, recall first to find it, then use update_memory instead of creating a duplicate.\n"
+            "- Use recall to check saved memory when the user asks about something you might have saved. If recall does not find it and the user is asking about something mentioned in a past chat, use deep_memory to search raw conversation history. When the user wants to add to or change something already saved, recall first to find it, then use update_memory instead of creating a duplicate.\n"
             "- After completing an action (commit, delete, edit, etc.), always confirm what happened.\n"
             "- If the user declines a tool action, do NOT retry or try alternatives. Just respond.\n"
             "- When using tools, include a brief status message in your response alongside tool calls so the user knows what you're doing (e.g. what you're about to check, what you just found, what you're fixing next).\n"
@@ -753,7 +765,7 @@ class Agent:
         # be guidance, a status question, or a request to stop — the model
         # reads it and decides. We don't bias toward "keep going."
         self.messages.append(
-            {
+            timestamp_message({
                 "role": "user",
                 "content": (
                     "The user sent this while you were working. Read it and "
@@ -761,7 +773,7 @@ class Agent:
                     "or a request to stop:\n"
                     f"{guidance_lines}"
                 ),
-            }
+            })
         )
 
     def build_system_prompt(self, extra_instructions=None, context_instructions=None):
@@ -1002,7 +1014,7 @@ class Agent:
         self.interrupt_requested = False
         stop_msg = "Stopped."
         self.run_controller.finish_run("interrupted", final_message=stop_msg)
-        self.messages.append({"role": "assistant", "content": stop_msg})
+        self.messages.append(timestamp_message({"role": "assistant", "content": stop_msg}))
         return {"message": {"role": "assistant", "content": stop_msg}}
 
     def ask_llm(self, prompt):
@@ -1024,7 +1036,7 @@ class Agent:
                 return response
 
             try:
-                self.messages.append({"role": "user", "content": prompt})
+                self.messages.append(timestamp_message({"role": "user", "content": prompt}))
                 self._compact_tool_history()
                 self._trim_history()
 
@@ -1052,7 +1064,7 @@ class Agent:
                             "I ran out of time working on that. Please try again "
                             "or break the task into smaller steps."
                         )
-                        self.messages.append({"role": "assistant", "content": msg})
+                        self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
                         return _finish(
                             {"message": {"role": "assistant", "content": msg}},
                             state="failed",
@@ -1085,7 +1097,7 @@ class Agent:
                         if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
                             msg = f"Primary model unavailable, using fallback ({self.ollama.last_model_used}). " + msg
                         self.display.status(msg)
-                        self.messages.append({"role": "assistant", "content": msg})
+                        self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
                         return _finish(
                             {"message": {"role": "assistant", "content": msg}},
                             state="failed",
@@ -1096,7 +1108,7 @@ class Agent:
                         spinner.stop()
                         msg = "Ollama stopped responding. Please check that the model is running and try again."
                         self.display.status(msg)
-                        self.messages.append({"role": "assistant", "content": msg})
+                        self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
                         return _finish(
                             {"message": {"role": "assistant", "content": msg}},
                             state="failed",
@@ -1121,7 +1133,7 @@ class Agent:
                         label = f"round {round_num}" if tool_calls else "final"
                         print(f"  [{label}] {json.dumps(message, default=str)[:300]}")
 
-                    self.messages.append(message)
+                    self.messages.append(timestamp_message(message))
 
                     # Surface any text the model included alongside tool calls,
                     # unless it's effectively a restatement of the tool target
@@ -1180,7 +1192,7 @@ class Agent:
                                 "loop — could you take a look or point me at a "
                                 "different approach?"
                             )
-                            self.messages.append({"role": "assistant", "content": stuck_msg})
+                            self.messages.append(timestamp_message({"role": "assistant", "content": stuck_msg}))
                             return _finish(
                                 {"message": {"role": "assistant", "content": stuck_msg}},
                                 state="failed",
@@ -1219,11 +1231,11 @@ class Agent:
                             print(f"  [tool result] {json.dumps(tool_result)[:200]}")
 
                         self.messages.append(
-                            {
+                            timestamp_message({
                                 "role": "tool",
                                 "name": tool_name,
                                 "content": compact_tool_result_for_history(tool_name, tool_result),
-                            }
+                            })
                         )
 
                     # React-only round with existing text: finalize without
@@ -1287,11 +1299,11 @@ class Agent:
             self.interrupt_requested = False
 
             # Ollama vision format: message with "images" field
-            self.messages.append({
+            self.messages.append(timestamp_message({
                 "role": "user",
                 "content": prompt,
                 "images": [b64],
-            })
+            }))
             self._compact_tool_history()
             self._trim_history()
 
@@ -1316,14 +1328,14 @@ class Agent:
                 self.run_controller.mark_model_round_end(0)
                 spinner.stop()
                 msg = str(e)
-                self.messages.append({"role": "assistant", "content": msg})
+                self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
                 self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             except OllamaTimeoutError:
                 self.run_controller.mark_model_round_end(0)
                 spinner.stop()
                 msg = "Ollama stopped responding while processing the image."
-                self.messages.append({"role": "assistant", "content": msg})
+                self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
                 self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             except Exception as e:
@@ -1336,7 +1348,7 @@ class Agent:
                            f"Try switching to a vision model like llava or moondream.")
                 else:
                     msg = f"Error processing image: {error_str}"
-                self.messages.append({"role": "assistant", "content": msg})
+                self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
                 self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             finally:
@@ -1347,7 +1359,7 @@ class Agent:
                 print(_c(DIM, f"  (primary model unavailable, using fallback: {self.ollama.last_model_used})"))
 
             message = response.get("message", {})
-            self.messages.append(message)
+            self.messages.append(timestamp_message(message))
             final_text = self._ensure_final_message_content(message, failed=False)
             self.run_controller.finish_run(
                 "completed", final_message=final_text

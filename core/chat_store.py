@@ -16,6 +16,7 @@ def _connect():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
+            owner_id TEXT,
             title TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -31,6 +32,28 @@ def _connect():
             updated_at TEXT NOT NULL
         )
     """)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)")}
+    if "owner_id" not in columns:
+        conn.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT")
+        columns.add("owner_id")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_owner_updated ON conversations(owner_id, updated_at)")
+    user_version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if user_version < 1:
+        conn.execute("""
+            UPDATE conversations
+               SET owner_id = (
+                   SELECT user_id
+                     FROM active_chats
+                    WHERE active_chats.chat_id = conversations.id
+                    ORDER BY active_chats.updated_at DESC
+                    LIMIT 1
+               )
+             WHERE owner_id IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM active_chats WHERE active_chats.chat_id = conversations.id
+               )
+        """)
+        conn.execute("PRAGMA user_version = 1")
     conn.commit()
     return conn
 
@@ -62,11 +85,12 @@ def get_active_chat(user_id: str) -> str | None:
     return row["chat_id"] if row else None
 
 
-def save_chat(chat_id: str, title: str, messages: list[dict]) -> str:
+def save_chat(chat_id: str, title: str, messages: list[dict], owner_id: str | None = None) -> str:
     """Save or update a conversation. Returns the chat id."""
     conn = _connect()
     now = datetime.now().isoformat()
     messages_json = json.dumps(messages, default=str)
+    owner = str(owner_id) if owner_id is not None else None
 
     existing = conn.execute(
         "SELECT id FROM conversations WHERE id = ?", (chat_id,)
@@ -74,13 +98,13 @@ def save_chat(chat_id: str, title: str, messages: list[dict]) -> str:
 
     if existing:
         conn.execute(
-            "UPDATE conversations SET title = ?, updated_at = ?, messages = ? WHERE id = ?",
-            (title, now, messages_json, chat_id),
+            "UPDATE conversations SET title = ?, updated_at = ?, messages = ?, owner_id = COALESCE(?, owner_id) WHERE id = ?",
+            (title, now, messages_json, owner, chat_id),
         )
     else:
         conn.execute(
-            "INSERT INTO conversations (id, title, created_at, updated_at, messages) VALUES (?, ?, ?, ?, ?)",
-            (chat_id, title, now, now, messages_json),
+            "INSERT INTO conversations (id, owner_id, title, created_at, updated_at, messages) VALUES (?, ?, ?, ?, ?, ?)",
+            (chat_id, owner, title, now, now, messages_json),
         )
 
     conn.commit()
@@ -88,12 +112,18 @@ def save_chat(chat_id: str, title: str, messages: list[dict]) -> str:
     return chat_id
 
 
-def load_chat(chat_id: str) -> dict | None:
+def load_chat(chat_id: str, owner_id: str | None = None) -> dict | None:
     """Load a conversation by id. Returns dict with id, title, messages, etc."""
     conn = _connect()
-    row = conn.execute(
-        "SELECT * FROM conversations WHERE id = ?", (chat_id,)
-    ).fetchone()
+    if owner_id is None:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (chat_id,)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ? AND owner_id = ?",
+            (chat_id, str(owner_id)),
+        ).fetchone()
     conn.close()
 
     if not row:
@@ -101,6 +131,7 @@ def load_chat(chat_id: str) -> dict | None:
 
     return {
         "id": row["id"],
+        "owner_id": row["owner_id"],
         "title": row["title"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -108,24 +139,67 @@ def load_chat(chat_id: str) -> dict | None:
     }
 
 
-def list_chats(limit: int = 20) -> list[dict]:
+def list_chats(limit: int = 20, owner_id: str | None = None) -> list[dict]:
     """List recent conversations, newest first."""
     conn = _connect()
-    rows = conn.execute(
-        "SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
+    if owner_id is None:
+        rows = conn.execute(
+            "SELECT id, owner_id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, owner_id, title, created_at, updated_at FROM conversations WHERE owner_id = ? ORDER BY updated_at DESC LIMIT ?",
+            (str(owner_id), limit),
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def delete_chat(chat_id: str) -> bool:
+def delete_chat(chat_id: str, owner_id: str | None = None) -> bool:
     """Delete a conversation. Returns True if it existed."""
     conn = _connect()
-    cursor = conn.execute("DELETE FROM conversations WHERE id = ?", (chat_id,))
+    if owner_id is None:
+        cursor = conn.execute("DELETE FROM conversations WHERE id = ?", (chat_id,))
+    else:
+        cursor = conn.execute(
+            "DELETE FROM conversations WHERE id = ? AND owner_id = ?",
+            (chat_id, str(owner_id)),
+        )
     conn.commit()
     conn.close()
     return cursor.rowcount > 0
+
+
+def iter_chats_with_messages(owner_id: str | None = None) -> list[dict]:
+    """Return saved conversations with messages for read-only search."""
+    conn = _connect()
+    if owner_id is None:
+        rows = conn.execute(
+            "SELECT id, owner_id, title, created_at, updated_at, messages FROM conversations ORDER BY updated_at DESC"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, owner_id, title, created_at, updated_at, messages FROM conversations WHERE owner_id = ? ORDER BY updated_at DESC",
+            (str(owner_id),),
+        ).fetchall()
+    conn.close()
+
+    chats = []
+    for row in rows:
+        try:
+            messages = json.loads(row["messages"])
+        except (TypeError, json.JSONDecodeError):
+            messages = []
+        chats.append({
+            "id": row["id"],
+            "owner_id": row["owner_id"],
+            "title": row["title"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "messages": messages,
+        })
+    return chats
 
 
 def new_chat_id() -> str:

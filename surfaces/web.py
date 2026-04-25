@@ -151,12 +151,12 @@ async def health():
 
 @app.get("/api/chats")
 async def api_list_chats():
-    return list_chats(limit=50)
+    return list_chats(limit=50, owner_id=WEB_USER_ID)
 
 
 @app.get("/api/chats/{chat_id}")
 async def api_get_chat(chat_id: str):
-    chat = load_chat(chat_id)
+    chat = load_chat(chat_id, owner_id=WEB_USER_ID)
     if not chat:
         return JSONResponse({"error": "not found"}, status_code=404)
     return chat
@@ -164,7 +164,7 @@ async def api_get_chat(chat_id: str):
 
 @app.delete("/api/chats/{chat_id}")
 async def api_delete_chat(chat_id: str):
-    deleted = delete_chat(chat_id)
+    deleted = delete_chat(chat_id, owner_id=WEB_USER_ID)
     return {"deleted": deleted}
 
 
@@ -616,7 +616,7 @@ async def websocket_chat(ws: WebSocket):
     resumed = None
     active_id = get_active_chat(WEB_USER_ID)
     if active_id:
-        resumed = load_chat(active_id)
+        resumed = load_chat(active_id, owner_id=WEB_USER_ID)
     if resumed:
         session = {
             "chat_id": resumed["id"],
@@ -666,7 +666,7 @@ async def websocket_chat(ws: WebSocket):
             if not session["first_message_sent"]:
                 session["title"] = make_title(text)
                 session["first_message_sent"] = True
-            save_chat(session["chat_id"], session["title"], session["messages"])
+            save_chat(session["chat_id"], session["title"], session["messages"], owner_id=WEB_USER_ID)
             set_active_chat(WEB_USER_ID, session["chat_id"])
             snap = agent.run_controller.get_status_snapshot()
             run_state = snap.get("state") or "completed"
@@ -738,7 +738,7 @@ async def websocket_chat(ws: WebSocket):
                     await ws.send_json({"type": "error", "text": "Finish or stop the current run before switching chats."})
                     continue
                 target_id = data.get("chat_id", "")
-                loaded = load_chat(target_id)
+                loaded = load_chat(target_id, owner_id=WEB_USER_ID)
                 if loaded:
                     session["chat_id"] = loaded["id"]
                     session["title"] = loaded["title"]
