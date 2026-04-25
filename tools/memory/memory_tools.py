@@ -98,6 +98,7 @@ def _parse_notify_at(value: str) -> str | None:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             stream=False,
+            priority="high",
         )
         result = response.get("message", {}).get("content", "").strip()
         if result == "INVALID":

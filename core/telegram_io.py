@@ -11,7 +11,12 @@ import socket
 import urllib.error
 
 from core.interrupts import request_interrupt
-from core.telegram_api import send_audio, send_message as telegram_send_message, telegram_api
+from core.telegram_api import (
+    edit_message_text as telegram_edit_message_text,
+    send_audio,
+    send_message as telegram_send_message,
+    telegram_api,
+)
 from core.telegram_state import (
     _active_chat_id,
     _get_user_config,
@@ -39,7 +44,11 @@ def _strip_emojis(text: str) -> str:
 
 def send_message(text, chat_id=None):
     chat_id = chat_id or _active_chat_id["value"]
-    telegram_send_message(text, chat_id)
+    return telegram_send_message(text, chat_id)
+
+
+def edit_message_text(text, chat_id, message_id):
+    return telegram_edit_message_text(text, chat_id, message_id)
 
 
 def send_tts_reply(text, chat_id, speech_client):

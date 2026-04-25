@@ -263,6 +263,27 @@ The repo now has the pieces a normal Ollama user actually needs:
 - [Gmail Setup](docs/gmail_setup.md)
 - [Family & Group Alerts](docs/family_alerts.md)
 
+## Project structure
+
+```text
+agent.py              Core Lumi agent loop, prompts, tool rounds, and Ollama calls
+ollama_client.py      Ollama HTTP client, fallback handling, and generation scheduling
+lumakit.py            Launcher/service entrypoint
+surfaces/             User interfaces: web, Telegram, and CLI
+core/                 Shared runtime services, storage, auth, tasks, reminders, email, Telegram I/O
+tools/                Tool registry modules grouped by repo, runtime, web, memory, and comms
+web/                  Browser UI assets
+docs/                 User-facing setup and feature guides
+photos/               App screenshots and visual assets used by docs/web
+lumi/                 Bundled identity/default local data
+memory/               Repo-local development databases, ignored by git
+```
+
+Runtime data normally lives under `~/.lumakit/`, including user config,
+chat/task/memory databases, notifications, and generated web media. The
+repo-local `.lumakit/` and `memory/` paths are development/runtime artifacts and
+are intentionally ignored.
+
 ## Development / debug entrypoints
 
 These still exist, but they are not the recommended user-facing path:

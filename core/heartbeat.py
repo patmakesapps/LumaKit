@@ -96,6 +96,7 @@ class Heartbeat:
                     messages=[{"role": "user", "content": prompt}],
                     stream=False,
                     deadline=30,
+                    priority="low",
                 )
                 reply = response.get("message", {}).get("content", "").strip()
 

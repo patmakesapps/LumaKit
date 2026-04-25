@@ -37,7 +37,7 @@ from core.telegram_api import (
     telegram_api,
 )
 from core.telegram_commands import apply_chat_runtime, handle_telegram_command, swap_in
-from core.telegram_io import send_message, send_tts_reply, telegram_confirm
+from core.telegram_io import edit_message_text, send_message, send_tts_reply, telegram_confirm
 from core.telegram_speech import SpeechClient
 from core.telegram_state import (
     ALLOWED_IDS,
@@ -183,10 +183,92 @@ def _telegram_show_tool_result(result):
     send_message(_tool_result_summary(tool_name, result), chat_id=chat_id)
 
 
+_stream_state = {
+    "chat_id": None,
+    "message_id": None,
+    "text": "",
+    "last_sent_len": 0,
+    "last_edit_at": 0.0,
+}
+
+
+def _reset_stream_state():
+    _stream_state.update({
+        "chat_id": None,
+        "message_id": None,
+        "text": "",
+        "last_sent_len": 0,
+        "last_edit_at": 0.0,
+    })
+
+
+def _telegram_stream_delta(chunk: str) -> bool:
+    chat_id = _active_chat_id["value"]
+    if not chat_id or not chunk:
+        return False
+    if _get_user_config(chat_id).get("voice_replies"):
+        return False
+
+    now = time.monotonic()
+    if _stream_state["chat_id"] != chat_id:
+        _reset_stream_state()
+        _stream_state["chat_id"] = chat_id
+
+    _stream_state["text"] += chunk
+    text = _stream_state["text"].strip()
+    if not text:
+        return True
+
+    if _stream_state["message_id"] is None:
+        if len(text) < 40 and "\n" not in text:
+            return True
+        payload = send_message(text, chat_id=chat_id)
+        message_id = (payload or {}).get("result", {}).get("message_id")
+        if message_id:
+            _stream_state["message_id"] = message_id
+            _stream_state["last_sent_len"] = len(text)
+            _stream_state["last_edit_at"] = now
+        return True
+
+    grew_enough = len(text) - int(_stream_state["last_sent_len"] or 0) >= 80
+    waited_enough = now - float(_stream_state["last_edit_at"] or 0.0) >= 1.0
+    if grew_enough or waited_enough:
+        edit_message_text(text, chat_id, _stream_state["message_id"])
+        _stream_state["last_sent_len"] = len(text)
+        _stream_state["last_edit_at"] = now
+    return True
+
+
+def _telegram_stream_end(text: str) -> None:
+    chat_id = _stream_state.get("chat_id")
+    message_id = _stream_state.get("message_id")
+    final = (text or _stream_state.get("text") or "").strip()
+    try:
+        if chat_id and message_id and final:
+            edit_message_text(final, chat_id, message_id)
+        elif chat_id and final:
+            send_message(final, chat_id=chat_id)
+    finally:
+        _reset_stream_state()
+
+
+def _telegram_stream_cancel() -> None:
+    chat_id = _stream_state.get("chat_id")
+    message_id = _stream_state.get("message_id")
+    try:
+        if chat_id and message_id:
+            edit_message_text("Working on it...", chat_id, message_id)
+    finally:
+        _reset_stream_state()
+
+
 _telegram_display = DisplayHooks(
     show_tool_call=_telegram_show_tool_call,
     show_tool_result=_telegram_show_tool_result,
     status=lambda msg: send_message(msg, chat_id=_active_chat_id["value"]) if _active_chat_id["value"] else None,
+    stream_delta=_telegram_stream_delta,
+    stream_end=_telegram_stream_end,
+    stream_cancel=_telegram_stream_cancel,
     confirm=telegram_confirm,
 )
 
@@ -201,7 +283,11 @@ def _send_reply(reply, chat_id, user_name, speech_client):
         send_tts_reply(reply, chat_id=chat_id, speech_client=speech_client)
     else:
         send_message(reply)
-    print(f"[Lumi -> {user_name}] {reply[:200]}")
+    safe_reply = reply[:200].encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+    try:
+        print(f"[Lumi -> {user_name}] {safe_reply}")
+    except UnicodeEncodeError:
+        print(f"[Lumi -> {user_name}] {safe_reply.encode('ascii', errors='replace').decode('ascii')}")
 
 
 def _poll_active_run_messages(agent: Agent) -> bool:
@@ -457,7 +543,7 @@ def run(
                             pass
                         response = agent.ask_llm_with_image(prompt=caption or None, image_data=image_data)
                         reply = response.get("message", {}).get("content", "")
-                        if reply:
+                        if reply and not response.get("streamed"):
                             _send_reply(reply, chat_id, user_name, speech_client)
                         session["messages"] = agent.messages
                         if not session["first_message_sent"]:
@@ -499,7 +585,7 @@ def run(
                             effective_text = f"{caption}\n\nVoice transcript:\n{transcript}"
                         response = agent.ask_llm(effective_text)
                         reply = response.get("message", {}).get("content", "")
-                        if reply:
+                        if reply and not response.get("streamed"):
                             _send_reply(reply, chat_id, user_name, speech_client)
                         session["messages"] = agent.messages
                         if not session["first_message_sent"]:
@@ -531,7 +617,7 @@ def run(
                         pass
                     response = agent.ask_llm(text)
                     reply = response.get("message", {}).get("content", "")
-                    if reply:
+                    if reply and not response.get("streamed"):
                         _send_reply(reply, chat_id, user_name, speech_client)
                     session["messages"] = agent.messages
                     if not session["first_message_sent"]:

@@ -566,11 +566,24 @@ def _make_agent(ws_id: int, send_fn):
             return _ws_confirm_results.get(ws_id, False)
         return True
 
+    def ws_stream_delta(chunk):
+        send_fn({"type": "stream_delta", "text": chunk})
+        return True
+
+    def ws_stream_end(text):
+        send_fn({"type": "stream_end", "text": text})
+
+    def ws_stream_cancel():
+        send_fn({"type": "stream_cancel"})
+
     display = DisplayHooks(
         show_tool_call=ws_show_tool_call,
         show_tool_result=ws_show_tool_result,
         show_diff=ws_show_diff,
         status=lambda msg: send_fn({"type": "status", "text": msg}),
+        stream_delta=ws_stream_delta,
+        stream_end=ws_stream_end,
+        stream_cancel=ws_stream_cancel,
         confirm=ws_confirm,
         confirm_email=ws_confirm_email,
     )
@@ -679,6 +692,7 @@ async def websocket_chat(ws: WebSocket):
                     "title": session["title"],
                     "run_state": run_state,
                     "run_error": run_error,
+                    "streamed": bool(response.get("streamed")),
                 })
         except Exception as e:
             if not ws_closed["v"]:

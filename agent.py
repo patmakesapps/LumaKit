@@ -451,6 +451,9 @@ class Agent:
             show_tool_result=base_display.show_tool_result,
             show_diff=base_display.show_diff,
             status=self._emit_display_status,
+            stream_delta=base_display.stream_delta,
+            stream_end=base_display.stream_end,
+            stream_cancel=base_display.stream_cancel,
             confirm=base_display.confirm,
             confirm_email=base_display.confirm_email,
         )
@@ -632,6 +635,7 @@ class Agent:
                 stream=False,
                 deadline=min(20, self.ROUND_DEADLINE),
                 check_interrupt=self._check_interrupt,
+                priority="foreground",
             )
         except Exception:
             return ""
@@ -860,6 +864,7 @@ class Agent:
                 response = self.ollama.chat(
                     model=self.model, messages=summary_msgs,
                     stream=False, deadline=30,
+                    priority="foreground",
                 )
             finally:
                 spinner.stop()
@@ -1074,25 +1079,65 @@ class Agent:
                     spinner_msg = "Lumi is thinking" if round_num == 0 else "Lumi is working"
                     spinner = Spinner(spinner_msg).start()
                     self.run_controller.mark_model_round_start(round_num)
+                    stream_state = {
+                        "active": False,
+                        "text": "",
+                    }
+
+                    def _on_stream_chunk(chunk: str) -> None:
+                        if not chunk:
+                            return
+                        stream_state["text"] += chunk
+                        try:
+                            displayed = self.display.stream_delta(chunk)
+                        except Exception:
+                            displayed = False
+                        if displayed is not False:
+                            stream_state["active"] = True
+
+                    def _cancel_stream_silently() -> None:
+                        if not stream_state["active"]:
+                            return
+                        try:
+                            self.display.stream_cancel()
+                        except Exception:
+                            pass
+                        stream_state["active"] = False
+
+                    def _cancel_stream_if_active() -> None:
+                        if not stream_state["active"]:
+                            return
+                        _cancel_stream_silently()
+                        stream_state["active"] = False
+
                     try:
                         remaining = self.ASK_LLM_TIMEOUT - (time.monotonic() - start_time)
                         deadline = min(self.ROUND_DEADLINE, remaining)
+                        # Keep tool-capable rounds buffered for now. Some Ollama
+                        # backends are less reliable when streaming and tools are
+                        # combined, and fallback after a partial stream can create
+                        # duplicate user-visible text.
+                        stream_this_round = False
                         response = self.ollama.chat(
                             model=self.model,
                             messages=self.messages,
                             tools=tools,
-                            stream=False,
+                            stream=stream_this_round,
                             deadline=deadline,
                             check_interrupt=self._check_interrupt,
+                            priority="foreground",
+                            on_chunk=_on_stream_chunk if stream_this_round else None,
                         )
                         self.run_controller.mark_model_round_end(round_num)
                     except OllamaInterruptedError:
                         self.run_controller.mark_model_round_end(round_num)
                         spinner.stop()
+                        _cancel_stream_if_active()
                         return self._interrupt_response()
                     except OllamaConnectionError as e:
                         self.run_controller.mark_model_round_end(round_num)
                         spinner.stop()
+                        _cancel_stream_silently()
                         msg = str(e)
                         if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
                             msg = f"Primary model unavailable, using fallback ({self.ollama.last_model_used}). " + msg
@@ -1106,6 +1151,7 @@ class Agent:
                     except OllamaTimeoutError:
                         self.run_controller.mark_model_round_end(round_num)
                         spinner.stop()
+                        _cancel_stream_silently()
                         msg = "Ollama stopped responding. Please check that the model is running and try again."
                         self.display.status(msg)
                         self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
@@ -1145,6 +1191,8 @@ class Agent:
                         (tc.get("function", {}) or {}).get("name") == "react_to_message"
                         for tc in tool_calls
                     )
+                    if tool_calls and stream_state["active"]:
+                        _cancel_stream_if_active()
                     if mid_text and tool_calls and not reactions_only_preview:
                         self.display.status(mid_text)
 
@@ -1153,6 +1201,12 @@ class Agent:
                             message,
                             failed=False,
                         )
+                        if stream_state["active"]:
+                            try:
+                                self.display.stream_end(final_text)
+                            except Exception:
+                                pass
+                            response["streamed"] = True
                         return _finish(response, final_message=final_text)
 
                     # If every tool call in this round is a side-effect-only
@@ -1318,6 +1372,7 @@ class Agent:
                     stream=False,
                     deadline=deadline,
                     check_interrupt=self._check_interrupt,
+                    priority="foreground",
                 )
                 self.run_controller.mark_model_round_end(0)
             except OllamaInterruptedError:

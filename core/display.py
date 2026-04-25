@@ -37,6 +37,9 @@ class DisplayHooks:
         show_tool_result: Callable[[dict], None] | None = None,
         show_diff: Callable[[str], None] | None = None,
         status: Callable[[str], None] | None = None,
+        stream_delta: Callable[[str], bool | None] | None = None,
+        stream_end: Callable[[str], None] | None = None,
+        stream_cancel: Callable[[], None] | None = None,
         confirm: Callable[[str], bool] | None = None,
         confirm_email: Callable[[dict, str | None], bool] | None = None,
     ):
@@ -44,6 +47,9 @@ class DisplayHooks:
         self.show_tool_result = show_tool_result or _cli_show_tool_result
         self.show_diff = show_diff or _cli_show_diff
         self.status = status or (lambda message: print(message))
+        self.stream_delta = stream_delta or (lambda text: False)
+        self.stream_end = stream_end or (lambda text: None)
+        self.stream_cancel = stream_cancel or (lambda: None)
         self.confirm = confirm or _cli_confirm
         self.confirm_email = confirm_email or (
             lambda preview, prompt=None: self.confirm(prompt or "Approve this email?")

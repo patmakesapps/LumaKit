@@ -432,6 +432,7 @@ class TaskRunner:
                     stream=False,
                     deadline=self.STEP_LLM_DEADLINE,
                     options={"num_predict": self.STRUCTURED_NUM_PREDICT},
+                    priority="background",
                 )
             except Exception as e:
                 return f"LLM error during step: {e}"
@@ -458,7 +459,8 @@ class TaskRunner:
         messages.append({"role": "user", "content": "Summarize what you've found so far."})
         try:
             final = ollama.chat(model=model, messages=messages, stream=False,
-                                deadline=self.STEP_LLM_DEADLINE)
+                                deadline=self.STEP_LLM_DEADLINE,
+                                priority="background")
             return (final.get("message", {}).get("content") or "").strip()
         except Exception:
             return "Step hit round limit."
@@ -544,6 +546,7 @@ class TaskRunner:
             stream=False,
             deadline=90,
             options={"num_predict": self.STRUCTURED_NUM_PREDICT},
+            priority="background",
         )
         return (response.get("message", {}).get("content") or "").strip()
 

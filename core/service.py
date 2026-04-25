@@ -201,6 +201,7 @@ class LumaKitService:
                 messages=[{"role": "user", "content": prompt}],
                 stream=False,
                 deadline=90,
+                priority="medium",
             )
             return response.get("message", {}).get("content", "").strip()
 

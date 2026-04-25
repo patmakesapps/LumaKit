@@ -46,6 +46,9 @@ let activityTitleEl = null;
 let activityLiveEl = null;
 let activityListEl = null;
 let activityLastText = '';
+let streamMessageEl = null;
+let streamBubbleEl = null;
+let streamText = '';
 // Pending confirm card awaiting a decision (only one at a time)
 let pendingConfirm = null;
 let currentTurnHadRichReply = false;
@@ -215,6 +218,66 @@ function addMessage(role, content) {
     if (window.hljs) {
         div.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
     }
+}
+
+function ensureStreamMessage() {
+    if (streamMessageEl && streamBubbleEl) return streamBubbleEl;
+    if ($emptyState && !$emptyState.classList.contains('hidden')) {
+        dismissEmptyState();
+    }
+    removeStatus();
+
+    const div = document.createElement('div');
+    div.className = 'message assistant streaming';
+    div.dataset.role = 'assistant';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    div.appendChild(bubble);
+
+    $messagesInner.appendChild(div);
+    streamMessageEl = div;
+    streamBubbleEl = bubble;
+    streamText = '';
+    return bubble;
+}
+
+function renderStreamText(text) {
+    const bubble = ensureStreamMessage();
+    bubble.innerHTML = renderMarkdown(text || '');
+    if (window.hljs && streamMessageEl) {
+        streamMessageEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+    }
+    currentTurnHadRichReply = true;
+    scrollToBottom();
+}
+
+function appendStreamText(text) {
+    if (!text) return;
+    streamText += text;
+    renderStreamText(streamText);
+}
+
+function finishStreamText(text) {
+    const finalText = (text || streamText || '').trim();
+    if (finalText) {
+        renderStreamText(finalText);
+    }
+    if (streamMessageEl) {
+        streamMessageEl.classList.remove('streaming');
+    }
+    streamMessageEl = null;
+    streamBubbleEl = null;
+    streamText = '';
+}
+
+function cancelStreamText() {
+    if (streamMessageEl) {
+        streamMessageEl.remove();
+    }
+    streamMessageEl = null;
+    streamBubbleEl = null;
+    streamText = '';
 }
 
 function ensureActivityCard() {
@@ -1033,7 +1096,9 @@ const ws = new WS({
         removeStatus();
         const text = (data.text || '').trim();
         const runError = (data.run_error || '').trim();
-        if (text) {
+        if (data.streamed) {
+            if (streamMessageEl && text) finishStreamText(text);
+        } else if (text) {
             addMessage('assistant', text);
         } else if (runState === 'failed' && runError) {
             addMessage('assistant', `_Run stopped: ${runError}_`);
@@ -1049,6 +1114,18 @@ const ws = new WS({
             currentChatId = data.chat_id;
             loadChatList();
         }
+    },
+
+    stream_delta(data) {
+        appendStreamText(String(data.text || ''));
+    },
+
+    stream_end(data) {
+        finishStreamText(String(data.text || ''));
+    },
+
+    stream_cancel() {
+        cancelStreamText();
     },
 
     status(data) {

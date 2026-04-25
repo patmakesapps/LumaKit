@@ -1,3 +1,5 @@
+import itertools
+import json
 import threading
 
 import requests
@@ -9,6 +11,85 @@ import requests
 # fail or thrash model loads. Serialize chat requests process-wide and let
 # callers wait their turn.
 _OLLAMA_CHAT_SLOT = threading.Lock()
+
+_PRIORITY_VALUES = {
+    "foreground": 0,
+    "high": 1,
+    "normal": 2,
+    "medium": 3,
+    "background": 4,
+    "low": 5,
+}
+
+
+class _OllamaGenerationScheduler:
+    """Priority gate in front of the hard Ollama serialization lock."""
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._sequence = itertools.count()
+        self._pending = []
+        self._busy = False
+
+    def _priority_value(self, priority):
+        if isinstance(priority, int):
+            return priority
+        return _PRIORITY_VALUES.get(str(priority or "normal"), _PRIORITY_VALUES["normal"])
+
+    def acquire(self, priority="normal", check_interrupt=None):
+        request = [self._priority_value(priority), next(self._sequence)]
+        with self._condition:
+            self._pending.append(request)
+            try:
+                while True:
+                    best = min(self._pending)
+                    if not self._busy and request == best:
+                        self._busy = True
+                        self._pending.remove(request)
+                        break
+                    if check_interrupt:
+                        try:
+                            if check_interrupt():
+                                raise OllamaInterruptedError("Interrupted by /stop.")
+                        except OllamaInterruptedError:
+                            raise
+                        except Exception:
+                            pass
+                    self._condition.wait(timeout=0.1)
+            except Exception:
+                if request in self._pending:
+                    self._pending.remove(request)
+                    self._condition.notify_all()
+                raise
+
+        acquired_hard_slot = False
+        try:
+            while not acquired_hard_slot:
+                acquired_hard_slot = _OLLAMA_CHAT_SLOT.acquire(timeout=0.1)
+                if acquired_hard_slot:
+                    return
+                if check_interrupt:
+                    try:
+                        if check_interrupt():
+                            raise OllamaInterruptedError("Interrupted by /stop.")
+                    except OllamaInterruptedError:
+                        raise
+                    except Exception:
+                        pass
+        except Exception:
+            with self._condition:
+                self._busy = False
+                self._condition.notify_all()
+            raise
+
+    def release(self):
+        _OLLAMA_CHAT_SLOT.release()
+        with self._condition:
+            self._busy = False
+            self._condition.notify_all()
+
+
+_OLLAMA_GENERATION_SCHEDULER = _OllamaGenerationScheduler()
 
 
 class OllamaTimeoutError(Exception):
@@ -46,22 +127,36 @@ class OllamaClient:
     # this field. No tokens generated while idle — pure memory retention.
     DEFAULT_KEEP_ALIVE = "30m"
 
-    def _acquire_chat_slot(self, check_interrupt=None):
-        while True:
-            acquired = _OLLAMA_CHAT_SLOT.acquire(timeout=0.1)
-            if acquired:
-                return
-            if not check_interrupt:
-                continue
-            try:
-                if check_interrupt():
-                    raise OllamaInterruptedError("Interrupted by /stop.")
-            except OllamaInterruptedError:
-                raise
-            except Exception:
-                continue
+    def _acquire_chat_slot(self, check_interrupt=None, priority="normal"):
+        _OLLAMA_GENERATION_SCHEDULER.acquire(
+            priority=priority,
+            check_interrupt=check_interrupt,
+        )
 
-    def _post(self, model, messages, tools, stream, options=None, request_timeout=None):
+    def _merge_stream_chunk(self, aggregate, payload, on_chunk=None):
+        message = payload.get("message") or {}
+        if message:
+            target = aggregate.setdefault("message", {})
+            role = message.get("role")
+            if role and not target.get("role"):
+                target["role"] = role
+            content = message.get("content")
+            if content:
+                target["content"] = target.get("content", "") + content
+                if on_chunk:
+                    on_chunk(content)
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                target.setdefault("tool_calls", []).extend(tool_calls)
+            for key, value in message.items():
+                if key not in {"role", "content", "tool_calls"}:
+                    target[key] = value
+        for key, value in payload.items():
+            if key != "message":
+                aggregate[key] = value
+
+    def _post(self, model, messages, tools, stream, options=None, request_timeout=None,
+              on_chunk=None):
         url = f"{self.base_url}/api/chat"
         payload = {
             "model": model,
@@ -74,20 +169,42 @@ class OllamaClient:
         if options:
             payload["options"] = options
         timeout = self._resolve_timeout(model, request_timeout)
-        response = requests.post(url, json=payload, timeout=timeout)
+        response = requests.post(url, json=payload, timeout=timeout, stream=bool(stream))
         response.raise_for_status()
+        if stream:
+            aggregate = {}
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                self._merge_stream_chunk(aggregate, json.loads(line), on_chunk=on_chunk)
+            aggregate.setdefault("message", {}).setdefault("content", "")
+            return aggregate
         return response.json()
 
     def _post_with_fallback(self, model, messages, tools, stream, options=None,
-                            request_timeout=None):
+                            request_timeout=None, on_chunk=None):
         """Try primary model, falling back on timeout/connection failure."""
         timeout = self._resolve_timeout(model, request_timeout)
+        emitted_chunks = False
+
+        def _recording_on_chunk(chunk):
+            nonlocal emitted_chunks
+            emitted_chunks = True
+            if on_chunk:
+                on_chunk(chunk)
+
+        chunk_callback = _recording_on_chunk if on_chunk else None
         try:
             result = self._post(
-                model, messages, tools, stream, options, request_timeout=timeout
+                model, messages, tools, stream, options, request_timeout=timeout,
+                on_chunk=chunk_callback,
             )
             return result, model
         except requests.Timeout as e:
+            if emitted_chunks:
+                raise OllamaTimeoutError(
+                    f"Ollama stream stopped responding within {timeout}s"
+                ) from e
             if not self.fallback_model or self.fallback_model == model:
                 raise OllamaTimeoutError(
                     f"Ollama did not respond within {timeout}s"
@@ -97,6 +214,7 @@ class OllamaClient:
                 result = self._post(
                     self.fallback_model, messages, tools, stream, options,
                     request_timeout=request_timeout,
+                    on_chunk=on_chunk,
                 )
                 return result, self.fallback_model
             except requests.Timeout as fallback_error:
@@ -111,6 +229,10 @@ class OllamaClient:
                     f"could not be reached."
                 ) from e
         except (requests.ConnectionError, ConnectionRefusedError, OSError) as e:
+            if emitted_chunks:
+                raise OllamaConnectionError(
+                    f"Ollama stream from primary ({model}) failed after partial output."
+                ) from e
             if not self.fallback_model or self.fallback_model == model:
                 raise OllamaConnectionError(
                     f"Cannot reach Ollama server at {self.base_url}. "
@@ -122,6 +244,7 @@ class OllamaClient:
                 result = self._post(
                     self.fallback_model, messages, tools, stream, options,
                     request_timeout=request_timeout,
+                    on_chunk=on_chunk,
                 )
                 return result, self.fallback_model
             except requests.Timeout as fallback_error:
@@ -136,21 +259,22 @@ class OllamaClient:
                 ) from e
 
     def chat(self, model, messages, tools=None, stream=False, deadline=None, options=None,
-             check_interrupt=None):
+             check_interrupt=None, priority="normal", on_chunk=None):
         """Send a chat request. If *deadline* (seconds) is set, raise
         OllamaTimeoutError when the call takes longer than that."""
         self.last_model_used = None
         timeout = self.request_timeout if deadline is None else max(1, float(deadline))
         if not check_interrupt:
-            self._acquire_chat_slot()
+            self._acquire_chat_slot(priority=priority)
             try:
                 result, used_model = self._post_with_fallback(
-                    model, messages, tools, stream, options, request_timeout=timeout
+                    model, messages, tools, stream, options, request_timeout=timeout,
+                    on_chunk=on_chunk,
                 )
                 self.last_model_used = used_model
                 return result
             finally:
-                _OLLAMA_CHAT_SLOT.release()
+                _OLLAMA_GENERATION_SCHEDULER.release()
 
         outcome = {}
         done = threading.Event()
@@ -158,16 +282,20 @@ class OllamaClient:
         def _run_request():
             acquired = False
             try:
-                self._acquire_chat_slot(check_interrupt=check_interrupt)
+                self._acquire_chat_slot(
+                    check_interrupt=check_interrupt,
+                    priority=priority,
+                )
                 acquired = True
                 try:
                     result, used_model = self._post_with_fallback(
                         model, messages, tools, stream, options,
                         request_timeout=timeout,
+                        on_chunk=on_chunk,
                     )
                 finally:
                     if acquired:
-                        _OLLAMA_CHAT_SLOT.release()
+                        _OLLAMA_GENERATION_SCHEDULER.release()
                 outcome["result"] = result
                 outcome["used_model"] = used_model
             except Exception as exc:

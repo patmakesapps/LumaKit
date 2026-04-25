@@ -29,9 +29,24 @@ def telegram_api(method: str, params: dict[str, Any] | None = None) -> dict[str,
 
 def send_message(text: str, chat_id: str | int):
     """Send a text message, splitting it into Telegram-sized chunks."""
+    first_payload = None
     while text:
         chunk, text = text[:4096], text[4096:]
-        telegram_api("sendMessage", {"chat_id": chat_id, "text": chunk})
+        payload = telegram_api("sendMessage", {"chat_id": chat_id, "text": chunk})
+        if first_payload is None:
+            first_payload = payload
+    return first_payload
+
+
+def edit_message_text(text: str, chat_id: str | int, message_id: int):
+    return telegram_api(
+        "editMessageText",
+        {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text[:4096] or " ",
+        },
+    )
 
 
 def send_chat_action(chat_id: str | int, action: str):
