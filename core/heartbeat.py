@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 
 from core import memory_store
+from core.runtime_config import get_effective_config_for_user
 from ollama_client import OllamaClient
 
 
@@ -89,8 +90,9 @@ class Heartbeat:
             )
 
             try:
-                client = OllamaClient()
-                model = os.getenv("OLLAMA_MODEL")
+                cfg = get_effective_config_for_user(self._owner_chat_id)
+                model = cfg.get("primary_model") or os.getenv("OLLAMA_MODEL")
+                client = OllamaClient(fallback_model=cfg.get("fallback_model"))
                 response = client.chat(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],

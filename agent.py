@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from core.cli import DIM, Spinner, _c
 from core.display import DisplayHooks, use_display
 from core.diffs import build_unified_diff, detect_line_ending, normalize_line_endings
 from core.interrupts import interrupt_context
+from core.app_runtime_config import get_app_runtime_config
 from core.paths import get_data_dir, get_repo_root
 from ollama_client import (
     OllamaClient,
@@ -27,10 +29,18 @@ from tools.code_intel.code_index import CodeIndex
 DIFF_TOOLS = {"edit_file", "write_file", "delete_file"}
 
 # Tools that run external commands — require showing the command + confirmation
-CONFIRM_TOOLS = {"execute_shell", "execute_python", "git_commit", "git_push"}
+CONFIRM_TOOLS = {"execute_shell", "execute_python", "git_add", "git_commit", "git_push"}
 
 # Tools that have a built-in preview/confirm flow — always preview first
 PREVIEW_TOOLS = {"move_path"}
+
+# Tools that always require explicit approval, even when the user has disabled
+# normal tool approvals.
+PROTECTED_APPROVAL_TOOLS = {"delete_file", "git_add", "git_commit", "git_push"}
+PROTECTED_SHELL_COMMAND_RE = re.compile(
+    r"\bgit\s+(add|commit|push)\b|\b(rm|del|erase|unlink)\b",
+    re.IGNORECASE,
+)
 
 # Keep tool outputs useful, but prevent a single tool call from bloating the
 # active chat history enough to stall later model requests.
@@ -479,6 +489,7 @@ class Agent:
         self.local_model = os.getenv("OLLAMA_LOCAL_MODEL")
         self.model = self.default_model
         self.fallback_model = self.default_fallback_model
+        self.last_model_used = None
         self.ollama = OllamaClient(fallback_model=self.fallback_model)
 
         root = get_repo_root()
@@ -881,6 +892,8 @@ class Agent:
 
     def _handle_diff_tool(self, tool_name, tool_inputs):
         """Preview a file-modifying tool, show the diff, and ask for confirmation."""
+        approvals_required = bool(get_app_runtime_config().get("require_tool_approvals", True))
+        force_approval = self._tool_always_requires_approval(tool_name, tool_inputs)
         preview = None
         if tool_name == "edit_file":
             preview = _preview_edit(tool_inputs)
@@ -889,7 +902,7 @@ class Agent:
         elif tool_name == "delete_file":
             preview = _preview_delete(tool_inputs)
 
-        if preview and preview.get("diff"):
+        if preview and preview.get("diff") and (approvals_required or force_approval):
             # For new file creation, skip the diff and show a simpler confirmation
             if tool_name == "write_file" and preview.get("is_new"):
                 prompt = f"Create {tool_inputs.get('path', 'file')}?"
@@ -931,6 +944,12 @@ class Agent:
 
     def _handle_confirm_tool(self, tool_name, tool_inputs):
         """Show what a command/action tool will do and ask for confirmation."""
+        if (
+            not bool(get_app_runtime_config().get("require_tool_approvals", True))
+            and not self._tool_always_requires_approval(tool_name, tool_inputs)
+        ):
+            return self.execute_tool(tool_name, tool_inputs)
+
         reason = tool_inputs.get("reason")
         reason_text = f" — {reason}" if reason else ""
         prompt = f"Allow {tool_name}?{reason_text}"
@@ -951,6 +970,12 @@ class Agent:
 
     def _handle_preview_tool(self, tool_name, tool_inputs):
         """Run the tool in preview mode first, show the plan, then confirm before executing."""
+        if (
+            not bool(get_app_runtime_config().get("require_tool_approvals", True))
+            and not self._tool_always_requires_approval(tool_name, tool_inputs)
+        ):
+            return self.execute_tool(tool_name, {**tool_inputs, "confirm": True})
+
         # Force preview mode
         preview_inputs = {**tool_inputs, "confirm": False}
         preview = self.execute_tool(tool_name, preview_inputs)
@@ -981,6 +1006,14 @@ class Agent:
         # Execute for real
         tool_inputs["confirm"] = True
         return self.execute_tool(tool_name, tool_inputs)
+
+    def _tool_always_requires_approval(self, tool_name: str, tool_inputs: dict) -> bool:
+        if tool_name in PROTECTED_APPROVAL_TOOLS:
+            return True
+        if tool_name == "execute_shell":
+            command = str(tool_inputs.get("command", "") or "")
+            return bool(PROTECTED_SHELL_COMMAND_RE.search(command))
+        return False
 
     def _check_interrupt(self):
         """Returns True if the current run should abort. Also polls the callback."""
@@ -1047,6 +1080,7 @@ class Agent:
 
                 # Clear any stale interrupt from a previous run
                 self.interrupt_requested = False
+                self.last_model_used = None
 
                 tools = self.get_tools_for_llm()
                 start_time = time.monotonic()
@@ -1128,6 +1162,7 @@ class Agent:
                             priority="foreground",
                             on_chunk=_on_stream_chunk if stream_this_round else None,
                         )
+                        self.last_model_used = self.ollama.last_model_used
                         self.run_controller.mark_model_round_end(round_num)
                     except OllamaInterruptedError:
                         self.run_controller.mark_model_round_end(round_num)

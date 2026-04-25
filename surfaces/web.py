@@ -120,9 +120,14 @@ def _settings_payload():
     app_cfg = get_app_runtime_config()
     installed_models, model_error = _discover_ollama_models()
     setup_required = not bool(effective.get("primary_model"))
+    primary_source = "app override" if app_cfg.get("primary_model") else ".env default"
+    fallback_source = "app override" if app_cfg.get("fallback_model") else ".env default"
     return {
         "model": effective.get("primary_model", ""),
         "fallback_model": effective.get("fallback_model", ""),
+        "model_source": primary_source,
+        "fallback_model_source": fallback_source,
+        "require_tool_approvals": bool(app_cfg.get("require_tool_approvals", True)),
         "data_dir": str(get_data_dir()),
         "app_primary_model": app_cfg.get("primary_model", ""),
         "app_fallback_model": app_cfg.get("fallback_model", ""),
@@ -204,13 +209,19 @@ async def api_get_settings():
 
 @app.post("/api/settings")
 async def api_update_settings(payload: dict):
-    primary_model = str(payload.get("primary_model", "") or "").strip()
-    fallback_model = str(payload.get("fallback_model", "") or "").strip()
+    app_cfg = get_app_runtime_config()
+    primary_model = str(payload.get("primary_model", app_cfg.get("primary_model", "")) or "").strip()
+    fallback_model = str(payload.get("fallback_model", app_cfg.get("fallback_model", "")) or "").strip()
+    require_tool_approvals = payload.get(
+        "require_tool_approvals",
+        app_cfg.get("require_tool_approvals", True),
+    )
 
     save_app_runtime_config(
         {
             "primary_model": primary_model,
             "fallback_model": fallback_model,
+            "require_tool_approvals": require_tool_approvals,
         }
     )
     return _settings_payload()
@@ -690,6 +701,8 @@ async def websocket_chat(ws: WebSocket):
                     "text": reply,
                     "chat_id": session["chat_id"],
                     "title": session["title"],
+                    "model_requested": agent.model,
+                    "model_used": agent.last_model_used or agent.ollama.last_model_used or agent.model,
                     "run_state": run_state,
                     "run_error": run_error,
                     "streamed": bool(response.get("streamed")),

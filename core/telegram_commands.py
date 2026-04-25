@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.chat_store import list_chats, load_chat, make_title, new_chat_id, save_chat, set_active_chat
+from core.app_runtime_config import get_app_runtime_config, save_app_runtime_config
 from core.identity import chat_owner_id
 from core.runtime_config import apply_user_runtime, get_owner_effective_config
 from core.telegram_io import poll_for_reply, send_message
@@ -179,6 +180,28 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
         send_message(f"Tool visibility: {'on' if not current else 'off'}")
         return True
 
+    if cmd in {"/permissions", "/approvals"}:
+        cfg = get_app_runtime_config().copy()
+        current = bool(cfg.get("require_tool_approvals", True))
+        value = args.strip().lower()
+        if not value:
+            send_message(
+                "Tool approvals are currently "
+                f"{'on' if current else 'off'}.\n\n"
+                "Use /permissions on or /permissions off. Delete file and git stage/commit/push still require approval."
+            )
+            return True
+        if value not in {"on", "off"}:
+            send_message("Usage: /permissions on|off")
+            return True
+        cfg["require_tool_approvals"] = value == "on"
+        save_app_runtime_config(cfg)
+        send_message(
+            f"Tool approvals: {value}. "
+            "Delete file and git stage/commit/push still require approval."
+        )
+        return True
+
     if cmd == "/help":
         lines = [
             "Commands:\n",
@@ -186,6 +209,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
             "/new - start a fresh conversation",
             "/stop - interrupt Lumi mid-task",
             "/tools - toggle tool call visibility",
+            "/permissions - toggle tool approval prompts",
             "/status - show model, storage, index info",
             "/tasks - list autonomous background tasks",
             "/task <id> - show details for a specific task",

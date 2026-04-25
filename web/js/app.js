@@ -848,6 +848,8 @@ async function loadSettings() {
         const modelsError = settings.installed_models_error
             ? `<div class="settings-error">Could not load installed models from Ollama: ${escapeHtml(settings.installed_models_error)}</div>`
             : '';
+        const approvalsOn = !!settings.require_tool_approvals;
+        const approvalStateLabel = approvalsOn ? 'On' : 'Off';
 
         $settingsContent.innerHTML = `
             ${banner}
@@ -879,13 +881,42 @@ async function loadSettings() {
                     </div>
                 </form>
             </div>
+            <div class="settings-card">
+                <div class="settings-card-header">
+                    <h3>Tool Permissions</h3>
+                    <div class="settings-radio-group" role="radiogroup" aria-label="Tool approvals">
+                        <label class="settings-radio-option ${approvalsOn ? 'selected' : ''}">
+                            <input type="radio" name="tool-approvals" value="on" ${approvalsOn ? 'checked' : ''}>
+                            <span>On</span>
+                        </label>
+                        <label class="settings-radio-option ${!approvalsOn ? 'selected' : ''}">
+                            <input type="radio" name="tool-approvals" value="off" ${!approvalsOn ? 'checked' : ''}>
+                            <span>Off</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="settings-permission-copy">
+                    Tool Permissions is currently <strong>${approvalStateLabel}</strong>.
+                    When Tool Permissions is off, Lumi can use ordinary tools without asking permission.
+                    When Tool Permissions is on, tool use requires user approval.
+                    Delete file and git stage, commit, and push always require approval.
+                </div>
+            </div>
             <div class="setting-row">
                 <span class="setting-label">Effective Primary Model</span>
-                <span class="setting-value">${settings.model || 'not set'}</span>
+                <span class="setting-value">${settings.model || 'not set'} <span class="setting-source">(${settings.model_source || 'unknown'})</span></span>
             </div>
             <div class="setting-row">
                 <span class="setting-label">Effective Fallback Model</span>
-                <span class="setting-value">${settings.fallback_model || 'none'}</span>
+                <span class="setting-value">${settings.fallback_model || 'none'} <span class="setting-source">(${settings.fallback_model_source || 'unknown'})</span></span>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">App Primary Override</span>
+                <span class="setting-value">${settings.app_primary_model || 'none'}</span>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">App Fallback Override</span>
+                <span class="setting-value">${settings.app_fallback_model || 'none'}</span>
             </div>
             <div class="setting-row">
                 <span class="setting-label">.env Primary Model</span>
@@ -910,6 +941,7 @@ async function loadSettings() {
         const $installedModelsSelect = document.getElementById('installed-models-select');
         const $settingsForm = document.getElementById('settings-form');
         const $resetModelSettings = document.getElementById('reset-model-settings');
+        const $toolApprovalInputs = $settingsContent.querySelectorAll('input[name="tool-approvals"]');
 
         if (pendingSettingsFocus) {
             pendingSettingsFocus = false;
@@ -940,6 +972,22 @@ async function loadSettings() {
                     busyLabel: 'Saving...',
                 },
             );
+        });
+
+        $toolApprovalInputs.forEach(input => {
+            input.addEventListener('change', async () => {
+                if (!input.checked) return;
+                const enabled = input.value === 'on';
+                await saveSettings(
+                    {
+                        require_tool_approvals: enabled,
+                    },
+                    {
+                        successMessage: `Tool approvals ${enabled ? 'enabled' : 'disabled'}.`,
+                        busyLabel: 'Saving...',
+                    },
+                );
+            });
         });
 
         $resetModelSettings?.addEventListener('click', async () => {
@@ -980,7 +1028,7 @@ function showSettingsNotice(kind, message) {
 function setSettingsBusy(busy, label = 'Saving...') {
     const $saveButton = $settingsContent.querySelector('.settings-btn.primary');
     const $resetButton = $settingsContent.querySelector('#reset-model-settings');
-    const $settingsInputs = $settingsContent.querySelectorAll('.settings-input, .settings-select');
+    const $settingsInputs = $settingsContent.querySelectorAll('.settings-input, .settings-select, input[name="tool-approvals"]');
 
     if ($saveButton) {
         if (!$saveButton.dataset.defaultLabel) {
@@ -1093,6 +1141,13 @@ const ws = new WS({
             : runState === 'stopped' || runState === 'interrupted' ? 'stopped'
             : 'done';
         settleActivityCard(cardState);
+        if (data.model_used) {
+            const requested = data.model_requested && data.model_requested !== data.model_used
+                ? ` (requested ${data.model_requested})`
+                : '';
+            appendActivityLine(`Model used: ${data.model_used}${requested}`, 'status');
+            $modelBadge.textContent = data.model_used;
+        }
         removeStatus();
         const text = (data.text || '').trim();
         const runError = (data.run_error || '').trim();

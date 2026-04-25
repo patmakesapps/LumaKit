@@ -20,13 +20,22 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
 from core import task_store
+from core.runtime_config import get_effective_config_for_user
 from ollama_client import OllamaClient
+
+
+PROTECTED_TASK_TOOLS = {"delete_file", "git_add", "git_commit", "git_push"}
+PROTECTED_TASK_SHELL_RE = re.compile(
+    r"\bgit\s+(add|commit|push)\b|\b(rm|del|erase|unlink)\b",
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +223,7 @@ class TaskRunner:
             last_err = None
             for attempt in range(self.MAX_PLAN_RETRIES + 1):
                 try:
-                    raw = self._llm_call(prompt)
+                    raw = self._llm_call(prompt, owner_chat_id=task.get("owner_chat_id"))
                     parsed = self._parse_json(raw)
                     if isinstance(parsed, list) and parsed:
                         plan = parsed
@@ -295,13 +304,13 @@ class TaskRunner:
         )
 
         try:
-            step_output = self._run_agentic_step(step_prompt)
+            step_output = self._run_agentic_step(step_prompt, owner_chat_id=task.get("owner_chat_id"))
         except Exception as e:
             step_output = f"Step execution error: {e}"
             print(f"[task-runner] step execution exception: {e}")
 
         # Evaluate the output
-        verdict_data = self._evaluate_step(step, step_output)
+        verdict_data = self._evaluate_step(step, step_output, owner_chat_id=task.get("owner_chat_id"))
         verdict = verdict_data.get("verdict", "failed")
         summary = verdict_data.get("summary", step_output[:200])
         reason = verdict_data.get("reason", "")
@@ -378,7 +387,7 @@ class TaskRunner:
     # Agentic step execution (LLM + tools loop)
     # ------------------------------------------------------------------
 
-    def _run_agentic_step(self, prompt: str) -> str:
+    def _run_agentic_step(self, prompt: str, owner_chat_id: str | None = None) -> str:
         """Run a mini agent loop for one step. Returns the final text output."""
         registry = self._get_registry()
         ollama = self._get_ollama()
@@ -421,7 +430,9 @@ class TaskRunner:
             {"role": "user", "content": prompt},
         ]
 
-        model = os.getenv("OLLAMA_MODEL")
+        cfg = self._model_config(owner_chat_id)
+        model = cfg["primary_model"]
+        ollama.fallback_model = cfg.get("fallback_model")
 
         for _ in range(self.MAX_TOOL_ROUNDS):
             try:
@@ -448,7 +459,21 @@ class TaskRunner:
                 fn = tc.get("function", {})
                 name = fn.get("name")
                 inputs = fn.get("arguments", {})
-                result = registry.execute(name, inputs)
+                protected_shell = (
+                    name == "execute_shell"
+                    and PROTECTED_TASK_SHELL_RE.search(str(inputs.get("command", "") or ""))
+                )
+                if name in PROTECTED_TASK_TOOLS or protected_shell:
+                    result = {
+                        "success": False,
+                        "error": (
+                            f"{name} requires explicit user approval and cannot run "
+                            "inside an autonomous task step."
+                        ),
+                        "toolName": name,
+                    }
+                else:
+                    result = registry.execute(name, inputs)
                 messages.append({
                     "role": "tool",
                     "name": name,
@@ -469,14 +494,14 @@ class TaskRunner:
     # Evaluation pass
     # ------------------------------------------------------------------
 
-    def _evaluate_step(self, step: dict, output: str) -> dict:
+    def _evaluate_step(self, step: dict, output: str, owner_chat_id: str | None = None) -> dict:
         prompt = _EVAL_PROMPT.format(
             step_description=step["description"],
             success_criteria=step["success_criteria"],
             step_output=output[:3000],
         )
         try:
-            raw = self._llm_call(prompt)
+            raw = self._llm_call(prompt, owner_chat_id=owner_chat_id)
             return self._parse_json(raw)
         except Exception as e:
             print(f"[task-runner] evaluation parse error: {e}")
@@ -514,7 +539,7 @@ class TaskRunner:
         )
 
         try:
-            report = self._llm_call(prompt)
+            report = self._llm_call(prompt, owner_chat_id=task.get("owner_chat_id"))
         except Exception as e:
             report = f"Could not generate report: {e}\n\nSteps completed: {steps_done}/{len(plan)}"
 
@@ -536,10 +561,12 @@ class TaskRunner:
     # LLM helpers
     # ------------------------------------------------------------------
 
-    def _llm_call(self, prompt: str) -> str:
+    def _llm_call(self, prompt: str, owner_chat_id: str | None = None) -> str:
         """Single-shot LLM call with no tools."""
         ollama = self._get_ollama()
-        model = os.getenv("OLLAMA_MODEL")
+        cfg = self._model_config(owner_chat_id)
+        model = cfg["primary_model"]
+        ollama.fallback_model = cfg.get("fallback_model")
         response = ollama.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
@@ -549,6 +576,13 @@ class TaskRunner:
             priority="background",
         )
         return (response.get("message", {}).get("content") or "").strip()
+
+    def _model_config(self, owner_chat_id: str | None = None) -> dict:
+        cfg = get_effective_config_for_user(owner_chat_id)
+        return {
+            "primary_model": cfg.get("primary_model") or os.getenv("OLLAMA_MODEL"),
+            "fallback_model": cfg.get("fallback_model") or os.getenv("OLLAMA_FALLBACK_MODEL"),
+        }
 
     def _parse_json(self, text: str) -> dict | list:
         """Extract and parse the first JSON object or array from text."""

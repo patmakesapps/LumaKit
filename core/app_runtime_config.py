@@ -16,7 +16,22 @@ CONFIG_PATH = get_data_dir() / "app_runtime_config.json"
 DEFAULT_CONFIG = {
     "primary_model": "",
     "fallback_model": "",
+    "require_tool_approvals": True,
 }
+
+
+def _coerce_bool(value, default=True):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
 
 
 def load_app_runtime_config():
@@ -31,6 +46,10 @@ def load_app_runtime_config():
             {
                 "primary_model": str(data.get("primary_model", "") or "").strip(),
                 "fallback_model": str(data.get("fallback_model", "") or "").strip(),
+                "require_tool_approvals": _coerce_bool(
+                    data.get("require_tool_approvals"),
+                    True,
+                ),
             }
         )
     return config
@@ -50,6 +69,10 @@ def save_app_runtime_config(config):
     payload.update(config)
     payload["primary_model"] = str(payload.get("primary_model", "") or "").strip()
     payload["fallback_model"] = str(payload.get("fallback_model", "") or "").strip()
+    payload["require_tool_approvals"] = _coerce_bool(
+        payload.get("require_tool_approvals"),
+        True,
+    )
 
     CONFIG_PATH.parent.mkdir(exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")

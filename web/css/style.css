@@ -1429,6 +1429,13 @@ body {
     font-size: 16px;
 }
 
+.settings-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+}
+
 .settings-note {
     font-size: 13px;
     color: var(--text-secondary);
@@ -1454,6 +1461,12 @@ body {
     font-size: 13px;
     color: var(--accent-light);
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    text-align: right;
+}
+
+.setting-source {
+    color: var(--text-secondary);
+    font-family: inherit;
 }
 
 .settings-form {
@@ -1471,6 +1484,60 @@ body {
 .settings-field label {
     font-size: 13px;
     color: var(--text-secondary);
+}
+
+.settings-permission-copy {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.settings-permission-copy strong {
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+.settings-radio-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    flex: 0 0 auto;
+}
+
+.settings-radio-option {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 58px;
+    min-height: 34px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.settings-radio-option input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.settings-radio-option.selected {
+    background: var(--accent);
+    color: #000;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
+.settings-radio-option:has(input:focus-visible) {
+    outline: 3px solid rgba(176, 124, 216, 0.24);
+    outline-offset: 2px;
 }
 
 .settings-input,

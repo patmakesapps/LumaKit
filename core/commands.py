@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from core.chat_store import delete_chat, list_chats, load_chat, make_title, new_chat_id, save_chat
+from core.app_runtime_config import get_app_runtime_config, save_app_runtime_config
 from core.identity import CLI_USER_ID
 from core.cli import BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW, _c, render_storage_meter
 from core.menu import select_menu
@@ -199,7 +200,7 @@ def _config_set(args: str, config_path: Path, agent):
 
     # Type coercion
     int_keys = {"storage_budget_mb", "max_tool_rounds", "recent_turns"}
-    bool_keys = {"auto_save_chats"}
+    bool_keys = {"auto_save_chats", "require_tool_approvals"}
 
     if key in int_keys:
         try:
@@ -211,6 +212,13 @@ def _config_set(args: str, config_path: Path, agent):
         value = value.lower() in ("true", "1", "yes")
 
     config = _load_config(config_path)
+    if key == "require_tool_approvals":
+        app_cfg = get_app_runtime_config().copy()
+        app_cfg["require_tool_approvals"] = bool(value)
+        save_app_runtime_config(app_cfg)
+        print(_c(GREEN, f"  Set {key} = {value}"))
+        return
+
     config[key] = value
 
     config_path.parent.mkdir(exist_ok=True)
@@ -240,6 +248,7 @@ def _get_defaults(agent) -> dict:
         "storage_budget_mb": agent.storage.budget_bytes // (1024 * 1024),
         "max_tool_rounds": agent.MAX_TOOL_ROUNDS,
         "auto_save_chats": True,
+        "require_tool_approvals": bool(get_app_runtime_config().get("require_tool_approvals", True)),
     }
 
 
