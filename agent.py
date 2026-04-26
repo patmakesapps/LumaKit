@@ -44,10 +44,10 @@ PROTECTED_SHELL_COMMAND_RE = re.compile(
 
 # Keep tool outputs useful, but prevent a single tool call from bloating the
 # active chat history enough to stall later model requests.
-TOOL_HISTORY_MAX_CHARS = 24000
-TOOL_HISTORY_STRING_LIMIT = 4000
-TOOL_HISTORY_READ_LIMIT = 12000
-TOOL_HISTORY_STDIO_LIMIT = 8000
+TOOL_HISTORY_MAX_CHARS = 4000
+TOOL_HISTORY_STRING_LIMIT = 2000
+TOOL_HISTORY_READ_LIMIT = 2500
+TOOL_HISTORY_STDIO_LIMIT = 2500
 TOOL_HISTORY_LIST_LIMIT = 40
 TOOL_HISTORY_DICT_LIMIT = 60
 TOOL_HISTORY_BROWSER_LIST_LIMIT = 25
@@ -281,11 +281,11 @@ def _summarize_large_tool_data(data):
             summary[key] = _compact_value_for_history(data[key], ("data", key))
 
     if isinstance(data.get("content"), str):
-        summary["content_preview"] = _truncate_text(data["content"], 4000)
+        summary["content_preview"] = _truncate_text(data["content"], 2000)
     if isinstance(data.get("stdout"), str):
-        summary["stdout_preview"] = _truncate_text(data["stdout"], 4000)
+        summary["stdout_preview"] = _truncate_text(data["stdout"], 2000)
     if isinstance(data.get("stderr"), str):
-        summary["stderr_preview"] = _truncate_text(data["stderr"], 4000)
+        summary["stderr_preview"] = _truncate_text(data["stderr"], 2000)
     if isinstance(data.get("page_text_snippet"), str):
         summary["page_text_snippet"] = _truncate_text(
             data["page_text_snippet"], TOOL_HISTORY_BROWSER_TEXT_LIMIT

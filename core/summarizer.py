@@ -4,7 +4,8 @@ Keeps the last RECENT_TURNS turns verbatim. Everything older gets compressed
 into a running summary that sits right after the system prompt.
 """
 
-RECENT_TURNS = 10  # keep this many recent turns verbatim
+RECENT_TURNS = 4  # keep this many recent turns verbatim
+MAX_UNSUMMARIZED_CHARS = 18000
 
 SUMMARIZE_PROMPT = (
     "Summarize the conversation so far in 2-3 concise sentences. "
@@ -18,10 +19,15 @@ def needs_summarization(messages: list[dict]) -> bool:
 
     Count user messages as a proxy for turns — each user message corresponds
     to one turn. Counting assistant messages would inflate the count since
-    tool calls produce extra assistant messages within a single turn.
+    tool calls produce extra assistant messages within a single turn. Also
+    compact by total content size because tool-heavy chats can grow large with
+    fewer than RECENT_TURNS user turns.
     """
     turns = sum(1 for m in messages if m.get("role") == "user")
-    return turns > RECENT_TURNS + 2
+    if turns > RECENT_TURNS + 2:
+        return True
+    total_chars = sum(len(str(m.get("content", ""))) for m in messages)
+    return total_chars > MAX_UNSUMMARIZED_CHARS
 
 
 def build_summary_request(messages: list[dict]) -> list[dict]:
