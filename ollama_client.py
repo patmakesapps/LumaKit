@@ -1,6 +1,10 @@
 import itertools
 import json
+import os
 import threading
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 
@@ -168,6 +172,7 @@ class OllamaClient:
             payload["tools"] = tools
         if options:
             payload["options"] = options
+        self._dump_payload_if_enabled(url, payload)
         timeout = self._resolve_timeout(model, request_timeout)
         response = requests.post(url, json=payload, timeout=timeout, stream=bool(stream))
         response.raise_for_status()
@@ -180,6 +185,31 @@ class OllamaClient:
             aggregate.setdefault("message", {}).setdefault("content", "")
             return aggregate
         return response.json()
+
+    def _dump_payload_if_enabled(self, url, payload):
+        enabled = str(os.getenv("LUMAKIT_DUMP_LLM_PAYLOADS", "")).strip().lower()
+        if enabled not in {"1", "true", "yes", "on"}:
+            return
+
+        dump_dir = os.getenv("LUMAKIT_LLM_PAYLOAD_DIR", "").strip()
+        if dump_dir:
+            target_dir = Path(dump_dir).expanduser()
+        else:
+            from core.paths import get_data_dir
+
+            target_dir = get_data_dir() / "llm_payloads"
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        path = target_dir / f"{now.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid.uuid4().hex[:8]}.json"
+        body = {
+            "created_at": now.isoformat(),
+            "url": url,
+            "payload": payload,
+        }
+        text = json.dumps(body, indent=2, ensure_ascii=False, default=str)
+        path.write_text(text, encoding="utf-8")
+        (target_dir / "latest.json").write_text(text, encoding="utf-8")
 
     def _post_with_fallback(self, model, messages, tools, stream, options=None,
                             request_timeout=None, on_chunk=None):
