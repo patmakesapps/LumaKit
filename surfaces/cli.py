@@ -59,8 +59,9 @@ def _cli_status(msg: str) -> None:
     print(f"\nLumi: {msg}\n")
 
 
-def main():
-    verbose = "--verbose" in sys.argv
+def main(argv: list[str] | None = None):
+    argv = sys.argv[1:] if argv is None else argv
+    verbose = "--verbose" in argv
     set_memory_active_user(CLI_USER_ID)
     agent = Agent(verbose=verbose, status_callback=_cli_status)
 

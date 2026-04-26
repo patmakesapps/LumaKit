@@ -25,7 +25,7 @@ load_dotenv()  # repo-root .env — won't override keys already set
 from agent import Agent, timestamp_message
 from core import auth
 from core.chat_store import make_title, save_chat, set_active_chat
-from core.cli import Spinner, show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
+from core.cli import show_tool_call as _cli_show_tool_call, show_tool_result as _cli_show_tool_result
 from core.display import DisplayHooks
 from core.identity import OWNER_USER_ID, chat_owner_id
 from core import email_draft_store
@@ -54,10 +54,6 @@ from core.telegram_state import (
 )
 from tools.comms.react import set_react_context
 from tools.memory.memory_tools import set_active_user
-
-# Disable the spinner — it's just noise in bridge mode
-Spinner.start = lambda self: self
-Spinner.stop = lambda self: None
 
 # ---------------------------------------------------------------------------
 # Telegram-specific DisplayHooks — forwards tool activity to the active chat
@@ -422,6 +418,7 @@ def run(
         verbose=verbose,
         check_interrupt=lambda: _poll_active_run_messages(agent),
         display=_telegram_display,
+        enable_spinner=False,
     )
     speech_client = SpeechClient()
     service = service or LumaKitService()

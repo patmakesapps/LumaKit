@@ -679,9 +679,22 @@ def command_serve(args) -> int:
     return 0
 
 
+def command_cli(args) -> int:
+    # Import lazily so the env loading at the top of this module runs before
+    # the CLI surface imports agent/core modules that read configuration.
+    from surfaces.cli import main as cli_main
+
+    cli_main(["--verbose"] if args.verbose else [])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lumakit")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    cli = subparsers.add_parser("cli", help="start the terminal chat interface")
+    cli.add_argument("--verbose", action="store_true", help="enable verbose agent logging")
+    cli.set_defaults(func=command_cli)
 
     serve = subparsers.add_parser("serve", help="run the long-lived LumaKit backend")
     serve.add_argument("--verbose", action="store_true", help="enable verbose Telegram agent logging")

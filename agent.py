@@ -444,8 +444,9 @@ class Agent:
     ASK_LLM_TIMEOUT = 300      # overall wall-clock limit (5 min)
 
     def __init__(self, verbose=False, status_callback=None, check_interrupt=None, display=None,
-                 run_controller=None):
+                 run_controller=None, enable_spinner=True):
         self.verbose = verbose
+        self.enable_spinner = enable_spinner
         # Called between tool rounds to check if the user wants to stop.
         # Should return True if the run should be interrupted.
         self.check_interrupt = check_interrupt
@@ -870,7 +871,7 @@ class Agent:
             return
 
         try:
-            spinner = Spinner("compacting context").start()
+            spinner = Spinner("compacting context").start() if self.enable_spinner else None
             try:
                 response = self.ollama.chat(
                     model=self.model, messages=summary_msgs,
@@ -878,7 +879,8 @@ class Agent:
                     priority="foreground",
                 )
             finally:
-                spinner.stop()
+                if spinner:
+                    spinner.stop()
             summary_text = response.get("message", {}).get("content", "")
             if summary_text:
                 before = len(self.messages)
@@ -1111,7 +1113,7 @@ class Agent:
                         )
 
                     spinner_msg = "Lumi is thinking" if round_num == 0 else "Lumi is working"
-                    spinner = Spinner(spinner_msg).start()
+                    spinner = Spinner(spinner_msg).start() if self.enable_spinner else None
                     self.run_controller.mark_model_round_start(round_num)
                     stream_state = {
                         "active": False,
@@ -1166,12 +1168,14 @@ class Agent:
                         self.run_controller.mark_model_round_end(round_num)
                     except OllamaInterruptedError:
                         self.run_controller.mark_model_round_end(round_num)
-                        spinner.stop()
+                        if spinner:
+                            spinner.stop()
                         _cancel_stream_if_active()
                         return self._interrupt_response()
                     except OllamaConnectionError as e:
                         self.run_controller.mark_model_round_end(round_num)
-                        spinner.stop()
+                        if spinner:
+                            spinner.stop()
                         _cancel_stream_silently()
                         msg = str(e)
                         if self.ollama.last_model_used and self.ollama.last_model_used != self.model:
@@ -1185,7 +1189,8 @@ class Agent:
                         )
                     except OllamaTimeoutError:
                         self.run_controller.mark_model_round_end(round_num)
-                        spinner.stop()
+                        if spinner:
+                            spinner.stop()
                         _cancel_stream_silently()
                         msg = "Ollama stopped responding. Please check that the model is running and try again."
                         self.display.status(msg)
@@ -1196,7 +1201,8 @@ class Agent:
                             error=msg,
                         )
                     finally:
-                        spinner.stop()
+                        if spinner:
+                            spinner.stop()
 
                     # Notify if fallback model was used
                     if (self.ollama.last_model_used
@@ -1396,7 +1402,7 @@ class Agent:
             self._compact_tool_history()
             self._trim_history()
 
-            spinner = Spinner("Lumi is looking at the image").start()
+            spinner = Spinner("Lumi is looking at the image").start() if self.enable_spinner else None
             self.run_controller.mark_model_round_start(0)
             try:
                 remaining = self.ASK_LLM_TIMEOUT
@@ -1412,25 +1418,29 @@ class Agent:
                 self.run_controller.mark_model_round_end(0)
             except OllamaInterruptedError:
                 self.run_controller.mark_model_round_end(0)
-                spinner.stop()
+                if spinner:
+                    spinner.stop()
                 return self._interrupt_response()
             except OllamaConnectionError as e:
                 self.run_controller.mark_model_round_end(0)
-                spinner.stop()
+                if spinner:
+                    spinner.stop()
                 msg = str(e)
                 self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
                 self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             except OllamaTimeoutError:
                 self.run_controller.mark_model_round_end(0)
-                spinner.stop()
+                if spinner:
+                    spinner.stop()
                 msg = "Ollama stopped responding while processing the image."
                 self.messages.append(timestamp_message({"role": "assistant", "content": msg}))
                 self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             except Exception as e:
                 self.run_controller.mark_model_round_end(0)
-                spinner.stop()
+                if spinner:
+                    spinner.stop()
                 error_str = str(e)
                 # Detect vision-not-supported errors from Ollama
                 if "does not support" in error_str.lower() or "vision" in error_str.lower():
@@ -1442,7 +1452,8 @@ class Agent:
                 self.run_controller.finish_run("failed", error=msg)
                 return {"message": {"role": "assistant", "content": msg}}
             finally:
-                spinner.stop()
+                if spinner:
+                    spinner.stop()
 
             # Notify if fallback was used
             if self.ollama.last_model_used and self.ollama.last_model_used != self.model:

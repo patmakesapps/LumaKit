@@ -165,6 +165,7 @@ That single command is the product contract:
 Other useful commands:
 
 ```bash
+lumakit cli
 lumakit status
 lumakit stop
 lumakit serve
@@ -175,6 +176,7 @@ lumakit service install --force
 What they do:
 
 - `lumakit open` starts or reuses the backend and opens the web UI
+- `lumakit cli` starts the terminal chat interface
 - `lumakit status` shows whether LumaKit is already running
 - `lumakit stop` stops the running backend
 - `lumakit serve` runs the backend in the foreground for debugging
@@ -194,7 +196,7 @@ LumaKit currently exposes three ways to interact:
 
 - **Web UI** for the main desktop experience
 - **Telegram** for mobile access, photos, voice, and notifications
-- **CLI** for local debugging and power-user workflows
+- **CLI** through `lumakit cli` for local debugging and power-user workflows
 
 The normal path is the web UI through `lumakit open`. Surface-specific modules still exist for direct debugging, but they are not the polished default.
 

@@ -41,7 +41,6 @@ from core.chat_store import (
     set_active_chat,
 )
 from core import notifications as notification_log
-from core.cli import Spinner
 from core.display import DisplayHooks
 from core.identity import WEB_USER_ID
 from core.interface_context import set_interface
@@ -55,10 +54,6 @@ from ollama_client import OllamaClient
 from tools.comms.email import send_preapproved
 from tools.comms.react import set_react_context
 from tools.memory.memory_tools import set_active_user as set_memory_active_user
-
-# Disable the spinner — not useful in web mode
-Spinner.start = lambda self: self
-Spinner.stop = lambda self: None
 
 PORT = int(os.getenv("LUMAKIT_WEB_PORT", "7865"))
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -606,6 +601,7 @@ def _make_agent(ws_id: int, send_fn):
         verbose="--verbose" in sys.argv,
         check_interrupt=lambda: False,
         display=display,
+        enable_spinner=False,
     )
 
     return agent
