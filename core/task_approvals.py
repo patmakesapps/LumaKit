@@ -14,7 +14,12 @@ import json
 from datetime import datetime
 
 from core import task_store
-from core.approval_policy import command_text_from_inputs
+from core.approval_policy import (
+    command_text_from_inputs,
+    normalize_task_actions,
+    task_action_key,
+    task_action_label,
+)
 
 # A grant is only valid for this long after approval (safety: a stale grant
 # shouldn't authorize an action days later).
@@ -53,13 +58,60 @@ def pending_approval(task: dict) -> dict | None:
     return pending if isinstance(pending, dict) else None
 
 
+# --- Scoped standing grants: "allow X for the rest of this task" ------------
+
+def allowed_actions(task: dict) -> list[str]:
+    return normalize_task_actions(_constraints(task).get("_allowed_actions"))
+
+
+def set_allowed_actions(task_id: int, keys) -> list[str]:
+    """Replace the task's standing grants. Returns the normalized list."""
+    task = task_store.get_task(task_id)
+    if not task:
+        return []
+    keys = normalize_task_actions(keys)
+    constraints = _constraints(task)
+    before = normalize_task_actions(constraints.get("_allowed_actions"))
+    if keys:
+        constraints["_allowed_actions"] = keys
+    else:
+        constraints.pop("_allowed_actions", None)
+    _save_constraints(task_id, constraints)
+    added = [k for k in keys if k not in before]
+    removed = [k for k in before if k not in keys]
+    if added or removed:
+        task_store.append_history(task_id, {
+            "type": "permissions_changed",
+            "detail": "; ".join(
+                [f"allowed {task_action_label(k)}" for k in added]
+                + [f"revoked {task_action_label(k)}" for k in removed]
+            ),
+            "allowed": keys,
+        })
+    return keys
+
+
+def grant_action(task_id: int, key: str) -> bool:
+    task = task_store.get_task(task_id)
+    if not task or key not in normalize_task_actions([key]):
+        return False
+    current = allowed_actions(task)
+    if key in current:
+        return True
+    set_allowed_actions(task_id, current + [key])
+    return True
+
+
 def request_approval(task: dict, tool: str, inputs: dict) -> dict:
     """Record a pending approval and block the task. Returns the record."""
     task_id = task["id"]
+    action_key = task_action_key(tool, inputs)
     record = {
         "tool": tool,
         "summary": action_summary(tool, inputs),
         "requested_at": datetime.now().isoformat(),
+        "action_key": action_key,
+        "action_label": task_action_label(action_key) if action_key else "",
     }
     constraints = _constraints(task)
     constraints["_pending_approval"] = record
@@ -85,14 +137,20 @@ def _resume_with_guidance(task_id: int, guidance: str) -> None:
     )
 
 
-def approve(task_id: int) -> tuple[bool, str]:
-    """Grant the pending action once and resume the task."""
+def approve(task_id: int, scope: str = "once") -> tuple[bool, str]:
+    """Grant the pending action and resume the task.
+
+    scope="once" mints a one-shot grant for that exact action. scope="task"
+    additionally allows that whole category of action (e.g. git add & commit)
+    for the rest of this task, so it never pauses for it again.
+    """
     task = task_store.get_task(task_id)
     if not task:
         return False, f"Task {task_id} not found."
     pending = pending_approval(task)
     if not pending:
         return False, f"Task {task_id} has no pending approval."
+    scope = "task" if str(scope or "").lower() in {"task", "always", "all"} else "once"
 
     constraints = _constraints(task)
     constraints.pop("_pending_approval", None)
@@ -104,12 +162,32 @@ def approve(task_id: int) -> tuple[bool, str]:
         "granted_at": datetime.now().isoformat(),
     })
     constraints["_approved_grants"] = grants
+    action_key = pending.get("action_key") or task_action_key(pending.get("tool"), {})
+    if scope == "task" and action_key:
+        allowed = normalize_task_actions(constraints.get("_allowed_actions"))
+        if action_key not in allowed:
+            allowed.append(action_key)
+        constraints["_allowed_actions"] = allowed
     _save_constraints(task_id, constraints)
     task_store.append_history(task_id, {
         "type": "approval_granted",
         "tool": pending.get("tool"),
         "detail": pending.get("summary"),
+        "scope": scope,
     })
+    if scope == "task" and action_key:
+        label = task_action_label(action_key)
+        _resume_with_guidance(
+            task_id,
+            f"The owner APPROVED running {pending.get('tool')} "
+            f"({pending.get('summary')}) and allowed '{label}' for the rest of this "
+            "task — run that action again now and continue; you won't be paused "
+            "for that kind of action again in this task.",
+        )
+        return True, (
+            f"Approved. Task {task_id} will run {pending.get('tool')} and continue, "
+            f"and '{label}' is allowed for the rest of this task."
+        )
     _resume_with_guidance(
         task_id,
         f"The owner APPROVED running {pending.get('tool')} "
@@ -149,12 +227,24 @@ def deny(task_id: int) -> tuple[bool, str]:
 
 
 def consume_grant(task: dict, tool: str, inputs: dict) -> bool:
-    """One-shot grant check: True if this exact action was approved recently.
+    """True if this protected action may run without pausing.
 
-    Matching is strict: same tool, and for command tools the same command
-    string (compared via the summary). Consumed grants are removed.
+    Standing grants first: if the owner allowed this category of action for
+    the whole task, it runs (and the use is logged in the timeline). Otherwise
+    a one-shot grant must match exactly: same tool, and for command tools the
+    same command string (compared via the summary). Consumed grants are removed.
     """
     constraints = _constraints(task)
+    action_key = task_action_key(tool, inputs)
+    if action_key and action_key in normalize_task_actions(constraints.get("_allowed_actions")):
+        task_store.append_history(task["id"], {
+            "type": "standing_grant_used",
+            "tool": tool,
+            "detail": action_summary(tool, inputs),
+            "action": action_key,
+        })
+        return True
+
     grants = constraints.get("_approved_grants")
     if not isinstance(grants, list) or not grants:
         return False

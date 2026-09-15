@@ -2277,7 +2277,92 @@ body {
     display: block;
 }
 
-.task-card.resolved.approved .task-card-status { color: var(--success); }
+.task-card.resolved.approved .task-card-status,
+.task-card.resolved.allowed .task-card-status { color: var(--success); }
+
+/* ===== Per-task permissions (New Task form + task panel) ===== */
+
+.task-permissions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.task-permission {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    cursor: pointer;
+}
+
+.task-permission:hover {
+    border-color: var(--border);
+}
+
+.task-permission input[type="checkbox"] {
+    margin: 3px 0 0;
+    accent-color: var(--accent-deep);
+    flex-shrink: 0;
+}
+
+.task-permission input[type="checkbox"]:disabled + .task-permission-main {
+    opacity: 0.6;
+}
+
+.task-permission-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.task-permission-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.task-permission-risky {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(220, 38, 38, 0.16);
+    color: #fecaca;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.task-permission-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+}
+
+.task-permissions-note {
+    margin: 4px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+}
+
+.task-permissions-note strong {
+    color: #fecaca;
+}
 .task-card.resolved.denied .task-card-status { color: var(--text-secondary); }
 .task-card.errored .task-card-status { color: var(--error); }
 .confirm-card-status.denied { color: var(--text-muted); }

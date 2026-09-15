@@ -255,6 +255,11 @@
                     <input id="new-task-due" type="datetime-local">
                     <span class="task-date-preview" id="new-task-due-preview">No deadline</span>
                 </label>
+                <div class="task-field">
+                    <span>Allowed without asking</span>
+                    <div id="new-task-permissions" class="task-permissions"></div>
+                    <p class="task-permissions-note">Anything not allowed here pauses the task and pings you. The task shows as <strong>Blocked</strong> until you approve or deny, in chat or from the Tasks panel.</p>
+                </div>
                 <div class="new-task-actions">
                     <button type="button" id="new-task-cancel" class="task-action-btn task-action-secondary">Cancel</button>
                     <button type="submit" class="task-action-btn task-action-primary">Create Task</button>

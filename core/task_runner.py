@@ -269,12 +269,29 @@ class TaskRunner:
         constraints = {k: v for k, v in (task.get("constraints") or {}).items()
                        if not str(k).startswith("_")}
         constraints_str = json.dumps(constraints) if constraints else "none"
+        from core import task_approvals
+        from core.approval_policy import task_action_label
+        allowed = task_approvals.allowed_actions(task)
+        if allowed:
+            permissions_line = (
+                "Pre-approved for this task (no approval pause): "
+                + ", ".join(task_action_label(k) for k in allowed)
+                + ". Other protected actions (git push, deleting files, ...) pause the "
+                "task for the owner's approval.\n"
+            )
+        else:
+            permissions_line = (
+                "Protected actions (git add/commit/push, deleting files, LumaBot power) "
+                "pause the task until the owner approves — do them only when the goal "
+                "needs them.\n"
+            )
 
         system = self._build_system_prompt()
         kickoff = (
             f"GOAL: {task['goal']}\n\n"
             f"Title: {task['title']}\n"
             f"Constraints: {constraints_str}\n"
+            f"{permissions_line}"
             f"Deadline: {task.get('due_at') or 'no hard deadline'}\n"
             f"Workspace (your working directory): {get_repo_root()}\n"
             f"Current date/time: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
@@ -503,6 +520,8 @@ class TaskRunner:
                     if task_approvals.consume_grant(task, name, inputs):
                         self._emit(task_id, "tool", tool=name or "?",
                                    detail="running owner-approved action")
+                        task_trace.record(task_id, "grant_used", round=rounds, name=name,
+                                          args=task_trace.preview(inputs))
                         refusal = None
                 if refusal:
                     messages.append({
@@ -766,13 +785,18 @@ class TaskRunner:
         record = task_approvals.request_approval(task, tool, inputs)
         task_trace.record(task["id"], "approval_requested", tool=tool,
                           summary=task_trace.preview(record.get("summary"), 300))
+        always_hint = (
+            f", /approve {task['id']} always to allow {record['action_label']} for the rest of this task"
+            if record.get("action_key") else ""
+        )
         self._notify_event(
             task, "approval",
             f"Task #{task['id']} '{task['title']}' needs your approval to run "
             f"{tool}:\n\n    {record['summary']}\n\n"
-            f"Reply /approve {task['id']} to allow it once, or /deny {task['id']} "
-            f"to refuse.\n{self._task_link(task['id'])}",
+            f"Reply /approve {task['id']} to allow it once{always_hint}, or "
+            f"/deny {task['id']} to refuse.\n{self._task_link(task['id'])}",
             tool=tool, summary=record.get("summary") or "",
+            action_key=record.get("action_key"), action_label=record.get("action_label") or "",
         )
         print(f"[task-runner] task {task['id']} blocked awaiting approval for {tool}")
 

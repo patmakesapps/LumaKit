@@ -948,8 +948,12 @@ function addTaskCard(text, task) {
         body = `<div class="task-card-text">${renderMarkdown(text || '')}</div>`;
     }
 
+    const allowLabel = task.action_label || task.action_key || '';
     const decisionButtons = event === 'approval'
         ? '<button class="confirm-btn confirm-no" data-task-action="deny">Deny</button>'
+          + (task.action_key
+              ? `<button class="confirm-btn confirm-no" data-task-action="allow" title="Also allow ${escapeHtml(allowLabel)} for the rest of this task">Allow for this task</button>`
+              : '')
           + '<button class="confirm-btn confirm-yes" data-task-action="approve">Approve once</button>'
         : '';
     card.innerHTML = `
@@ -975,12 +979,15 @@ function addTaskCard(text, task) {
             const buttons = card.querySelectorAll('[data-task-action]');
             buttons.forEach(b => { b.disabled = true; });
             try {
-                const res = await fetch(`/api/tasks/${taskId}/${action}`, { method: 'POST' });
+                const endpoint = action === 'allow' ? 'approve' : action;
+                const res = await fetch(`/api/tasks/${taskId}/${endpoint}`, action === 'allow'
+                    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'task' }) }
+                    : { method: 'POST' });
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.error || `HTTP ${res.status}`);
                 }
-                markTaskCardResolved(card, action === 'approve' ? 'approved' : 'denied');
+                markTaskCardResolved(card, action === 'approve' ? 'approved' : action === 'allow' ? 'allowed' : 'denied');
             } catch (e) {
                 buttons.forEach(b => { b.disabled = false; });
                 card.classList.add('errored');
@@ -999,12 +1006,14 @@ function addTaskCard(text, task) {
 function markTaskCardResolved(card, resolution) {
     card.classList.remove('errored');
     card.classList.add('resolved', resolution);
-    card.querySelectorAll('[data-task-action="approve"], [data-task-action="deny"]').forEach(b => b.remove());
+    card.querySelectorAll('[data-task-action="approve"], [data-task-action="allow"], [data-task-action="deny"]').forEach(b => b.remove());
     const status = card.querySelector('.task-card-status');
     if (status) {
         status.textContent = resolution === 'approved'
             ? 'Approved once. The task is resuming.'
-            : 'Denied. The task will continue without it.';
+            : resolution === 'allowed'
+                ? 'Allowed for the rest of this task. The task is resuming.'
+                : 'Denied. The task will continue without it.';
     }
 }
 
@@ -1477,6 +1486,7 @@ const $taskPanelClose = document.getElementById('task-panel-close');
 
 async function openTaskDetail(taskId) {
     taskDetailId = taskId;
+    await loadTaskActionCatalog();
     $taskPanel.classList.remove('hidden');
     $taskPanel.setAttribute('aria-hidden', 'false');
     $taskPanelBackdrop.classList.remove('hidden');
@@ -1569,10 +1579,14 @@ function renderTaskDetail(task) {
                 <div class="task-retry-reason"><code>${escapeHtml(pendingApproval.summary || '')}</code></div>
                 <div class="task-actions-row" style="margin-top:8px">
                     <button class="task-action-btn task-action-primary" data-action="approve">Approve once</button>
+                    ${pendingApproval.action_key
+                        ? `<button class="task-action-btn task-action-secondary" data-action="approve-task" title="Also allow ${escapeHtml(pendingApproval.action_label || pendingApproval.action_key)} for the rest of this task">Allow for this task</button>`
+                        : ''}
                     <button class="task-action-btn task-action-secondary" data-action="deny">Deny</button>
                 </div>
            </div>`
         : '';
+    const allowedActions = Array.isArray(constraints._allowed_actions) ? constraints._allowed_actions : [];
 
     const retryCount = Number(constraints._runtime_retries || 0);
     const retryBannerHtml = (!isTerminal && retryCount > 0)
@@ -1653,6 +1667,12 @@ function renderTaskDetail(task) {
         </section>
 
         <section class="task-panel-section">
+            <h4>Allowed without asking</h4>
+            <div class="task-permissions">${renderPermissionRows(allowedActions, 'data-permission', !isTerminal)}</div>
+            <p class="task-permissions-note">Anything else that is protected pauses the task and pings you.</p>
+        </section>
+
+        <section class="task-panel-section">
             <h4>Workspace</h4>
             <p class="task-empty-note">${escapeHtml(task.workspace_path || 'not set')}</p>
         </section>
@@ -1661,6 +1681,9 @@ function renderTaskDetail(task) {
     // Wire action buttons
     $taskPanelBody.querySelectorAll('[data-action]').forEach(btn => {
         btn.onclick = () => handleTaskAction(task.id, btn.dataset.action);
+    });
+    $taskPanelBody.querySelectorAll('[data-permission]').forEach(box => {
+        box.onchange = () => updateTaskPermissions(task.id);
     });
 
     // Live human-readable previews for the datetime inputs.
@@ -1788,7 +1811,16 @@ async function handleTaskAction(taskId, action) {
             if (!ok) return;
         }
 
-        if (action === 'pause' || action === 'resume' || action === 'cancel' || action === 'restart' || action === 'approve' || action === 'deny') {
+        if (action === 'approve-task') {
+            const res = await fetch(`/api/tasks/${taskId}/approve`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scope: 'task' }),
+            });
+            if (!res.ok) throw new Error((await res.json()).error || 'Failed to approve');
+            taskDetailCache = await res.json();
+            renderTaskDetail(taskDetailCache);
+        } else if (action === 'pause' || action === 'resume' || action === 'cancel' || action === 'restart' || action === 'approve' || action === 'deny') {
             const res = await fetch(`/api/tasks/${taskId}/${action}`, { method: 'POST' });
             if (!res.ok) throw new Error((await res.json()).error || `Failed to ${action}`);
             taskDetailCache = await res.json();
@@ -1883,16 +1915,71 @@ if ($taskPanelBackdrop) $taskPanelBackdrop.onclick = closeTaskDetail;
 
 // --- New task modal ---
 const $newTaskBtn = document.getElementById('new-task-btn');
+// --- Per-task permissions (scoped standing grants) ---
+// Catalog of protected actions the owner can pre-approve for a whole task.
+let taskActionCatalog = [];
+
+async function loadTaskActionCatalog() {
+    if (taskActionCatalog.length) return taskActionCatalog;
+    try {
+        const res = await fetch('/api/tasks/actions');
+        if (res.ok) taskActionCatalog = await res.json();
+    } catch (_) { /* leave empty; rows just won't render */ }
+    return taskActionCatalog;
+}
+
+function renderPermissionRows(selected, attr, editable) {
+    const chosen = new Set(Array.isArray(selected) ? selected : []);
+    if (!taskActionCatalog.length) {
+        return chosen.size
+            ? `<p class="task-empty-note">Allowed: ${[...chosen].map(escapeHtml).join(', ')}</p>`
+            : '<p class="task-empty-note">Everything protected pauses for approval.</p>';
+    }
+    return taskActionCatalog.map(a => `
+        <label class="task-permission${a.risky ? ' risky' : ''}">
+            <input type="checkbox" ${attr}="${escapeHtml(a.key)}" ${chosen.has(a.key) ? 'checked' : ''} ${editable ? '' : 'disabled'}>
+            <span class="task-permission-main">
+                <span class="task-permission-label">${escapeHtml(a.label)}${a.risky ? '<span class="task-permission-risky">risky</span>' : ''}</span>
+                <span class="task-permission-hint">${escapeHtml(a.hint)}</span>
+            </span>
+        </label>`).join('');
+}
+
+async function updateTaskPermissions(taskId) {
+    const keys = [...$taskPanelBody.querySelectorAll('[data-permission]:checked')]
+        .map(el => el.dataset.permission);
+    try {
+        const res = await fetch(`/api/tasks/${taskId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ allowed_actions: keys }),
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Could not update permissions');
+        taskDetailCache = await res.json();
+        renderTaskDetail(taskDetailCache);
+    } catch (e) {
+        showAlertDialog({ title: 'Permissions not saved', body: e.message || String(e) });
+    }
+}
+
+// Warm the catalog so the panel's permissions section renders with labels.
+loadTaskActionCatalog();
+
 const $newTaskModal = document.getElementById('new-task-modal');
 const $newTaskClose = document.getElementById('new-task-close');
 const $newTaskCancel = document.getElementById('new-task-cancel');
 const $newTaskForm = document.getElementById('new-task-form');
 const $newTaskError = document.getElementById('new-task-error');
 
-function openNewTaskModal() {
+async function openNewTaskModal() {
     $newTaskForm.reset();
     $newTaskError.classList.add('hidden');
     $newTaskModal.classList.remove('hidden');
+    const $perms = document.getElementById('new-task-permissions');
+    if ($perms) {
+        await loadTaskActionCatalog();
+        $perms.innerHTML = renderPermissionRows([], 'data-new-permission', true);
+    }
 }
 function closeNewTaskModal() {
     $newTaskModal.classList.add('hidden');
@@ -1920,6 +2007,8 @@ if ($newTaskForm) {
             goal: document.getElementById('new-task-goal').value.trim(),
             start_at: document.getElementById('new-task-start').value || null,
             due_at: document.getElementById('new-task-due').value || null,
+            allowed_actions: [...$newTaskForm.querySelectorAll('[data-new-permission]:checked')]
+                .map(el => el.dataset.newPermission),
         };
         try {
             const res = await fetch('/api/tasks', {

@@ -376,7 +376,7 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
             lines.append("/adduser - authorize a new user")
             lines.append("/removeuser - remove an authorized user")
             lines.append("/role - set a user's tool-access role (trusted/limited)")
-            lines.append("/approve <id> - approve a task's pending protected action")
+            lines.append("/approve <id> [always] - approve a task's pending protected action (always = for the rest of that task)")
             lines.append("/deny <id> - refuse a task's pending protected action")
             lines.append("/model - choose the owner's Telegram model settings")
             lines.append("/workspace - pick or set the working directory (alias /dir)")
@@ -610,13 +610,15 @@ def handle_telegram_command(text, agent, session, chat_id, speech_client):
 
     if cmd in {"/approve", "/deny"} and str(chat_id) == str(OWNER_ID):
         from core import task_approvals
+        parts = str(args or "").split()
         try:
-            task_id = int(str(args or "").strip())
-        except ValueError:
-            send_message(f"Usage: {cmd} <task id>  (see /tasks for ids)")
+            task_id = int(parts[0])
+        except (IndexError, ValueError):
+            send_message(f"Usage: {cmd} <task id> [always]  (see /tasks for ids)")
             return True
+        scope = "task" if len(parts) > 1 and parts[1].lower() in {"always", "task", "all"} else "once"
         if cmd == "/approve":
-            ok, reply = task_approvals.approve(task_id)
+            ok, reply = task_approvals.approve(task_id, scope=scope)
         else:
             ok, reply = task_approvals.deny(task_id)
         send_message(("✅ " if ok else "⚠️ ") + reply)

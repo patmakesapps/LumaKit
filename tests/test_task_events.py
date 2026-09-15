@@ -121,11 +121,13 @@ def test_chat_reply_resolves_pending_approval(store, tmp_path, monkeypatch):
     assert web._task_approval_reply("1") is None  # nothing pending yet
 
     task_approvals.request_approval(store.get_task(task_id), "git_commit", {"message": "m"})
-    assert web._task_approval_reply("1") == ("approve", task_id)
-    assert web._task_approval_reply("  YES ") == ("approve", task_id)
-    assert web._task_approval_reply("no") == ("deny", task_id)
-    assert web._task_approval_reply(f"/deny {task_id}") == ("deny", task_id)
-    assert web._task_approval_reply("/approve 42") == ("approve", 42)
+    assert web._task_approval_reply("1") == ("approve", task_id, "once")
+    assert web._task_approval_reply("  YES ") == ("approve", task_id, "once")
+    assert web._task_approval_reply("always") == ("approve", task_id, "task")
+    assert web._task_approval_reply("no") == ("deny", task_id, "once")
+    assert web._task_approval_reply(f"/deny {task_id}") == ("deny", task_id, "once")
+    assert web._task_approval_reply("/approve 42") == ("approve", 42, "once")
+    assert web._task_approval_reply("/approve 42 always") == ("approve", 42, "task")
     assert web._task_approval_reply("what is the status?") is None
 
 

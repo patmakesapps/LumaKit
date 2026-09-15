@@ -506,6 +506,14 @@ async def api_get_task(task_id: int):
 _TASK_PATCHABLE = {"title", "goal", "due_at", "next_run_at"}
 
 
+@app.get("/api/tasks/actions")
+async def api_task_action_catalog():
+    """Protected actions a task can be pre-approved for (New Task form,
+    task panel permissions)."""
+    from core.approval_policy import task_action_catalog
+    return task_action_catalog()
+
+
 @app.post("/api/tasks")
 async def api_create_task(payload: dict):
     title = str(payload.get("title", "") or "").strip()
@@ -523,11 +531,18 @@ async def api_create_task(payload: dict):
             return JSONResponse({"error": str(exc)}, status_code=400)
     else:
         workspace_path = str(_default_workspace())
+    from core.approval_policy import normalize_task_actions
     origin_chat = get_active_chat(WEB_USER_ID)
+    constraints: dict = {}
+    if origin_chat:
+        constraints["_origin_chat"] = origin_chat
+    allowed = normalize_task_actions(payload.get("allowed_actions"))
+    if allowed:
+        constraints["_allowed_actions"] = allowed
     task_id = task_store.create_task(
         title=title,
         goal=goal,
-        constraints={"_origin_chat": origin_chat} if origin_chat else None,
+        constraints=constraints or None,
         owner_chat_id=WEB_USER_ID,
         due_at=due_at,
         start_at=start_at,
@@ -541,9 +556,14 @@ async def api_update_task(task_id: int, payload: dict):
     if not task_store.get_task(task_id):
         return JSONResponse({"error": "not found"}, status_code=404)
     fields = {k: v for k, v in payload.items() if k in _TASK_PATCHABLE}
-    if not fields:
+    permissions = payload.get("allowed_actions") if "allowed_actions" in payload else None
+    if not fields and permissions is None:
         return JSONResponse({"error": "no editable fields provided"}, status_code=400)
-    task_store.update_task(task_id, **fields)
+    if fields:
+        task_store.update_task(task_id, **fields)
+    if permissions is not None:
+        from core import task_approvals
+        task_approvals.set_allowed_actions(task_id, permissions if isinstance(permissions, list) else [])
     return task_store.get_task(task_id)
 
 
@@ -581,12 +601,13 @@ async def api_cancel_task(task_id: int):
 
 
 @app.post("/api/tasks/{task_id}/approve")
-async def api_approve_task(task_id: int):
+async def api_approve_task(task_id: int, payload: dict | None = None):
     from core import task_approvals
-    ok, message = task_approvals.approve(task_id)
+    scope = str((payload or {}).get("scope") or "once")
+    ok, message = task_approvals.approve(task_id, scope=scope)
     if not ok:
         return JSONResponse({"error": message}, status_code=400)
-    _resolve_task_cards(task_id, "approved")
+    _resolve_task_cards(task_id, "allowed" if scope.lower() in {"task", "always", "all"} else "approved")
     return task_store.get_task(task_id)
 
 
@@ -1029,7 +1050,11 @@ _TASK_APPROVE = frozenset({
 _TASK_DENY = frozenset({
     "2", "no", "n", "nope", "deny", "denied", "don't", "dont", "cancel", "skip", "refuse",
 })
-_TASK_CMD_RE = re.compile(r"^/(approve|deny)\s+(\d+)\s*$", re.IGNORECASE)
+# Approve AND allow that kind of action for the rest of the task.
+_TASK_APPROVE_ALWAYS = frozenset({
+    "always", "yes always", "allow always", "allow for this task", "approve all", "allow all",
+})
+_TASK_CMD_RE = re.compile(r"^/(approve|deny)\s+(\d+)(?:\s+(always|task|all))?\s*$", re.IGNORECASE)
 
 
 def _pending_approval_task() -> dict | None:
@@ -1044,17 +1069,20 @@ def _pending_approval_task() -> dict | None:
     return max(candidates, key=lambda t: int(t.get("id") or 0))
 
 
-def _task_approval_reply(text: str) -> tuple[str, int] | None:
-    """('approve'|'deny', task_id) if this chat message is an answer to a
-    pending task approval, else None."""
+def _task_approval_reply(text: str) -> tuple[str, int, str] | None:
+    """('approve'|'deny', task_id, scope) if this chat message is an answer
+    to a pending task approval, else None. scope is 'once' or 'task'."""
     normalized = " ".join(str(text or "").strip().lower().split())
     match = _TASK_CMD_RE.match(normalized)
     if match:
-        return match.group(1).lower(), int(match.group(2))
-    if normalized in _TASK_APPROVE or normalized in _TASK_DENY:
+        scope = "task" if match.group(3) else "once"
+        return match.group(1).lower(), int(match.group(2)), scope
+    if normalized in _TASK_APPROVE or normalized in _TASK_DENY or normalized in _TASK_APPROVE_ALWAYS:
         task = _pending_approval_task()
         if task:
-            return ("approve" if normalized in _TASK_APPROVE else "deny"), int(task["id"])
+            if normalized in _TASK_APPROVE_ALWAYS:
+                return "approve", int(task["id"]), "task"
+            return ("approve" if normalized in _TASK_APPROVE else "deny"), int(task["id"]), "once"
     return None
 
 
@@ -1677,11 +1705,14 @@ async def websocket_chat(ws: WebSocket):
                     # approval directly — it must never reach the chat model,
                     # which would otherwise try to do the task's work itself.
                     from core import task_approvals
-                    action, target_id = task_reply
-                    decide = task_approvals.approve if action == "approve" else task_approvals.deny
-                    ok, message = decide(target_id)
+                    action, target_id, scope = task_reply
+                    if action == "approve":
+                        ok, message = task_approvals.approve(target_id, scope=scope)
+                    else:
+                        ok, message = task_approvals.deny(target_id)
                     if ok:
-                        _resolve_task_cards(target_id, "approved" if action == "approve" else "denied")
+                        resolution = "denied" if action == "deny" else ("allowed" if scope == "task" else "approved")
+                        _resolve_task_cards(target_id, resolution)
                         reply = message
                     else:
                         reply = f"Couldn't {action} task #{target_id}: {message}"

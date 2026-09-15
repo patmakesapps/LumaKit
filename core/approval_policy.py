@@ -60,6 +60,75 @@ PROTECTED_SHELL_COMMAND_RE = re.compile(
 # Tools that accept a raw command string worth screening.
 _COMMAND_TOOLS = {"execute_shell", "run_command"}
 
+# Protected actions the owner may pre-approve for ONE whole task (scoped
+# standing grants). Anything not granted still pauses the task for a one-shot
+# approval. Keys are stable ids used by the API, the UI, and task constraints
+# (``_allowed_actions``). These categories mirror AUTONOMOUS_REFUSED_TOOLS and
+# PROTECTED_SHELL_COMMAND_RE — keep them in sync.
+TASK_ACTION_GRANTS: dict[str, dict] = {
+    "git_commit": {
+        "label": "Git add & commit",
+        "hint": "Stage files and create commits in the workspace repo.",
+        "tools": frozenset({"git_add", "git_commit"}),
+        "shell": re.compile(r"\bgit\s+(add|commit)\b", re.IGNORECASE),
+        "risky": False,
+    },
+    "git_push": {
+        "label": "Git push",
+        "hint": "Push commits to a remote. Hard to take back.",
+        "tools": frozenset({"git_push"}),
+        "shell": re.compile(r"\bgit\s+push\b", re.IGNORECASE),
+        "risky": True,
+    },
+    "delete_files": {
+        "label": "Delete files",
+        "hint": "Remove files or folders (delete_file, rm, del).",
+        "tools": frozenset({"delete_file"}),
+        "shell": re.compile(r"\b(rm|del|erase|unlink)\b", re.IGNORECASE),
+        "risky": True,
+    },
+    "lumabot_power": {
+        "label": "LumaBot power & autonomy",
+        "hint": "Reboot or power off the robot, or start its autonomy mode.",
+        "tools": frozenset({"lumabot_reboot", "lumabot_poweroff", "lumabot_start_autonomy"}),
+        "shell": None,
+        "risky": True,
+    },
+}
+
+
+def task_action_key(tool_name: str | None, tool_inputs: dict) -> str | None:
+    """Which pre-approvable action a protected call falls under, if any."""
+    command = command_text_from_inputs(tool_inputs or {}) if tool_name in _COMMAND_TOOLS else ""
+    for key, spec in TASK_ACTION_GRANTS.items():
+        if tool_name in spec["tools"]:
+            return key
+        if command and spec["shell"] is not None and spec["shell"].search(command):
+            return key
+    return None
+
+
+def normalize_task_actions(values) -> list[str]:
+    """Validated, de-duplicated grant keys; unknown keys are dropped."""
+    out: list[str] = []
+    for value in values or []:
+        key = str(value).strip()
+        if key in TASK_ACTION_GRANTS and key not in out:
+            out.append(key)
+    return out
+
+
+def task_action_catalog() -> list[dict]:
+    return [
+        {"key": key, "label": spec["label"], "hint": spec["hint"], "risky": bool(spec["risky"])}
+        for key, spec in TASK_ACTION_GRANTS.items()
+    ]
+
+
+def task_action_label(key: str) -> str:
+    spec = TASK_ACTION_GRANTS.get(key)
+    return spec["label"] if spec else str(key)
+
 
 def command_text_from_inputs(tool_inputs: dict) -> str:
     command = str(tool_inputs.get("command", "") or "")
