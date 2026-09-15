@@ -2207,6 +2207,26 @@ body {
     margin-bottom: 0;
 }
 
+.task-card-text p {
+    margin: 0 0 8px;
+}
+
+/* Markdown lists in a report: keep the numbers inside the card padding. */
+.task-card-text ol,
+.task-card-text ul {
+    margin: 6px 0 8px;
+    padding-left: 24px;
+}
+
+.task-card-text li {
+    margin: 2px 0;
+}
+
+.task-card-text pre {
+    margin: 8px 0;
+    overflow-x: auto;
+}
+
 .task-card-text code {
     font-size: 12px;
 }

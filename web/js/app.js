@@ -981,7 +981,9 @@ function addTaskCard(text, task) {
                 openTaskDetail(taskId);
                 return;
             }
-            const buttons = card.querySelectorAll('[data-task-action]');
+            // Only freeze the decision buttons while the request runs; "Open
+            // task" must keep working before, during, and after.
+            const buttons = card.querySelectorAll('[data-task-action]:not([data-task-action="open"])');
             buttons.forEach(b => { b.disabled = true; });
             try {
                 let res;
