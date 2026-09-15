@@ -500,20 +500,46 @@ body {
 }
 
 .lumabot-estop-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     height: 28px;
-    padding: 0 10px;
+    padding: 0 10px 0 8px;
     border: 1px solid rgba(248, 113, 113, 0.75);
     border-radius: 999px;
     background: rgba(220, 38, 38, 0.2);
     color: #fecaca;
     font-size: 10px;
     font-weight: 800;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
     cursor: pointer;
+    transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.lumabot-estop-btn svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+.lumabot-estop-label {
+    font-weight: 600;
+    opacity: 0.85;
 }
 
 .lumabot-estop-btn:hover {
     background: rgba(220, 38, 38, 0.4);
     color: #fff;
+}
+
+/* LumaBot Off: keep the e-stop reachable but visibly tied to the (idle) bot. */
+.lumabot-estop-btn.idle {
+    opacity: 0.55;
+}
+
+.lumabot-estop-btn.idle:hover {
+    opacity: 1;
 }
 
 .lumabot-remote-controls {
@@ -906,6 +932,9 @@ body {
     justify-content: center;
     gap: 16px;
     padding: 0;
+    /* Size to content so a status/notice appended after it stays in flow
+       instead of spilling under the composer. */
+    height: auto;
 }
 
 .chat-view-centered .composer-wrapper {
@@ -1400,6 +1429,70 @@ body {
 @keyframes pulse {
     0%, 100% { opacity: 0.4; }
     50% { opacity: 1; }
+}
+
+/* Replies from LumaBot commands: solid, labelled, no pulse. */
+.lumabot-notice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin: 8px 0;
+    padding: 10px 14px;
+    border: 1px solid rgba(176, 124, 216, 0.35);
+    border-radius: 12px;
+    background: rgba(26, 20, 40, 0.75);
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.lumabot-notice.fail {
+    border-color: rgba(248, 113, 113, 0.55);
+    background: rgba(220, 38, 38, 0.14);
+}
+
+.lumabot-notice.ok {
+    border-color: rgba(74, 222, 128, 0.5);
+    background: rgba(34, 197, 94, 0.12);
+}
+
+.lumabot-notice-label {
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.lumabot-notice.fail .lumabot-notice-label {
+    background: rgba(248, 113, 113, 0.22);
+    color: #fecaca;
+}
+
+.lumabot-notice.ok .lumabot-notice-label {
+    background: rgba(74, 222, 128, 0.2);
+    color: #bbf7d0;
+}
+
+.lumabot-notice-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.lumabot-notice-hint {
+    flex-basis: 100%;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.chat-view-centered .lumabot-notice {
+    width: 100%;
+    max-width: 620px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 /* ===== In-chat activity block ===== */
@@ -3314,7 +3407,11 @@ body {
     }
 
     .lumabot-estop-btn {
-        padding: 0 7px;
+        padding: 0 8px 0 7px;
+    }
+
+    .lumabot-estop-label {
+        display: none;
     }
 
     .lumabot-remote-controls {

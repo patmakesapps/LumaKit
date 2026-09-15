@@ -46,7 +46,11 @@
             <div class="topbar-right">
                 <div id="lumabot-mode-dropdown" class="custom-dropdown"></div>
                 <button id="lumabot-estop-btn" class="lumabot-estop-btn" type="button"
-                        title="Emergency stop LumaBot" aria-label="Emergency stop LumaBot">STOP</button>
+                        title="Emergency stop the LumaBot robot (only matters if you use LumaBot)" aria-label="Emergency stop LumaBot">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4M9 4h6"/><circle cx="9" cy="14" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.2" fill="currentColor" stroke="none"/></svg>
+                    <span class="lumabot-estop-label">LumaBot</span>
+                    <span class="lumabot-estop-word">STOP</span>
+                </button>
                 <form id="workspace-form" class="workspace-form" title="Working directory for this chat">
                     <svg class="workspace-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
                     <input id="workspace-input" class="workspace-input" type="text" spellcheck="false" placeholder="Working directory">

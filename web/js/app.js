@@ -322,6 +322,9 @@ function setLumabotMode(mode) {
         lumabotModeDropdown.trigger.classList.toggle('agent', lumabotMode === 'agent');
         lumabotModeDropdown.trigger.classList.toggle('remote', lumabotMode === 'remote');
     }
+    // The emergency stop only matters when a LumaBot is in play — dim it in
+    // Off mode so it reads as part of the LumaBot controls, not a chat stop.
+    $lumabotEstopBtn?.classList.toggle('idle', lumabotMode === 'off');
     const remote = lumabotMode === 'remote';
     $lumabotRemoteControls?.classList.toggle('hidden', !remote);
     $suggestionCards?.classList.toggle('hidden', remote);
@@ -1012,6 +1015,31 @@ function showStatus(text) {
     statusEl = document.createElement('div');
     statusEl.className = 'status-msg';
     statusEl.textContent = text;
+    $messagesInner.appendChild(statusEl);
+    scrollToBottom();
+}
+
+// LumaBot replies get a solid, labelled notice rather than the faint pulsing
+// status line — most people never use LumaBot, so the message has to say
+// clearly where it came from and that it can be ignored.
+function showLumabotNotice(text, ok) {
+    removeStatus();
+    statusEl = document.createElement('div');
+    statusEl.className = `lumabot-notice ${ok ? 'ok' : 'fail'}`;
+    statusEl.setAttribute('role', 'status');
+    const label = document.createElement('span');
+    label.className = 'lumabot-notice-label';
+    label.textContent = 'LumaBot';
+    const body = document.createElement('span');
+    body.className = 'lumabot-notice-text';
+    body.textContent = text;
+    statusEl.append(label, body);
+    if (!ok && lumabotMode === 'off') {
+        const hint = document.createElement('span');
+        hint.className = 'lumabot-notice-hint';
+        hint.textContent = 'The STOP button only controls a LumaBot robot. If you are not using one, you can ignore this.';
+        statusEl.appendChild(hint);
+    }
     $messagesInner.appendChild(statusEl);
     scrollToBottom();
 }
@@ -2451,7 +2479,10 @@ const ws = new WS({
     },
 
     lumabot_control(data) {
-        showStatus(data.text || (data.ok ? 'LumaBot command accepted.' : 'LumaBot command failed.'));
+        showLumabotNotice(
+            data.text || (data.ok ? 'Command accepted.' : 'Command failed.'),
+            !!data.ok,
+        );
     },
 
     workspace_error(data) {
