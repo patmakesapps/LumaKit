@@ -1,0 +1,43 @@
+FROM dolphin3:latest
+
+# ChatML template with tool-calling support.
+# Ollama only advertises the "tools" capability when the template
+# references .Tools / .ToolCalls, so this is what makes LumaKit's
+# tool use work with Dolphin 3.
+TEMPLATE """{{- if or .System .Tools }}<|im_start|>system
+{{ .System }}
+{{- if .Tools }}
+
+You have access to the following tools. When you need to call one, respond with a JSON object inside <tool_call></tool_call> tags, like:
+<tool_call>
+{"name": "<tool name>", "arguments": {<arguments>}}
+</tool_call>
+
+Available tools:
+{{- range .Tools }}
+{{ .Function }}
+{{- end }}
+{{- end }}<|im_end|>
+{{ end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 -}}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+{{ if .Content }}{{ .Content }}
+{{- else if .ToolCalls }}
+{{- range .ToolCalls }}<tool_call>
+{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}
+</tool_call>
+{{- end }}
+{{- end }}{{ if not $last }}<|im_end|>
+{{ end }}
+{{- else if eq .Role "tool" }}<|im_start|>tool
+{{ .Content }}<|im_end|>
+{{ end }}
+{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant
+{{ end }}
+{{- end }}"""
+
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"

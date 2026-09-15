@@ -359,6 +359,7 @@ If you want the full always-available agent experience, these docs matter:
 - [Autostart / systemd](docs/autostart.md)
 - [Family & Group Alerts](docs/family_alerts.md)
 - [LumaBot on a Raspberry Pi](docs/lumabot_pi_setup.md)
+- [Adding Tool Support to an Ollama Model](docs/ollama_tool_models.md)
 
 ## Current model/runtime controls
 
