@@ -1480,6 +1480,9 @@ async function openTaskDetail(taskId) {
     $taskPanel.classList.remove('hidden');
     $taskPanel.setAttribute('aria-hidden', 'false');
     $taskPanelBackdrop.classList.remove('hidden');
+    // Wide screens dock the panel beside the chat (CSS shrinks .main);
+    // narrow screens fall back to the overlay + backdrop.
+    document.body.classList.add('task-panel-open');
     $taskPanelBody.innerHTML = '<p class="task-empty-note">Loading…</p>';
     $taskPanelTitle.textContent = '';
     $taskPanelStatus.textContent = '';
@@ -1500,6 +1503,7 @@ function closeTaskDetail() {
     $taskPanel.classList.add('hidden');
     $taskPanel.setAttribute('aria-hidden', 'true');
     $taskPanelBackdrop.classList.add('hidden');
+    document.body.classList.remove('task-panel-open');
     taskDetailId = null;
     taskDetailCache = null;
     if (taskDetailWs) {
@@ -2795,6 +2799,8 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         if (!$diffPanel.classList.contains('hidden')) {
             closeDiffPanel();
+        } else if ($taskPanel && !$taskPanel.classList.contains('hidden')) {
+            closeTaskDetail();
         }
     }
 });

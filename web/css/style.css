@@ -25,6 +25,7 @@
 
     --sidebar-width: 260px;
     --topbar-height: 48px;
+    --task-panel-width: 480px;
     --content-width: 720px;
     --composer-max-height: 150px;
 
@@ -293,6 +294,49 @@ body {
     height: 100vh;
     min-width: 0;
     position: relative;
+    transition: margin-right 0.22s ease-out;
+}
+
+/* Task panel docks beside the chat on wide screens: the chat shrinks and
+   stays fully usable instead of being dimmed behind a modal. Narrow
+   screens keep the overlay + backdrop (see the max-width media block). */
+@media (min-width: 1024px) {
+    body.task-panel-open .main {
+        margin-right: var(--task-panel-width);
+    }
+
+    .task-panel-backdrop {
+        display: none;
+    }
+
+    /* The main column is narrow while docked: let the top bar compact
+       instead of overflowing and clipping the LumaBot controls. */
+    body.task-panel-open .topbar-right {
+        flex-shrink: 1;
+        overflow: hidden;
+    }
+
+    body.task-panel-open .workspace-form {
+        min-width: 120px;
+        max-width: 240px;
+        flex: 1 1 120px;
+    }
+
+    body.task-panel-open .workspace-input {
+        width: 100%;
+        min-width: 60px;
+    }
+
+    body.task-panel-open .model-badge-text {
+        max-width: 90px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    body.task-panel-open .status-label {
+        display: none;
+    }
 }
 
 /* ===== Topbar ===== */
@@ -2519,7 +2563,7 @@ body {
     top: 0;
     right: 0;
     height: 100vh;
-    width: min(560px, 100%);
+    width: min(var(--task-panel-width), 100%);
     background: var(--bg-primary);
     border-left: 1px solid var(--border-subtle);
     box-shadow: -12px 0 32px rgba(0, 0, 0, 0.3);
@@ -2532,6 +2576,12 @@ body {
 
 .task-panel:not(.hidden) {
     transform: translateX(0);
+}
+
+@media (min-width: 1024px) {
+    .task-panel {
+        box-shadow: none;
+    }
 }
 
 .task-panel.hidden {
