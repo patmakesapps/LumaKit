@@ -257,6 +257,13 @@
                 </label>
                 <div class="task-field">
                     <span>Allowed without asking</span>
+                    <label class="task-permission task-permission-all">
+                        <input type="checkbox" id="new-task-allow-all">
+                        <span class="task-permission-main">
+                            <span class="task-permission-label">Allow all protected actions</span>
+                            <span class="task-permission-hint">Let the task run start to finish without pausing for approval.</span>
+                        </span>
+                    </label>
                     <div id="new-task-permissions" class="task-permissions"></div>
                     <p class="task-permissions-note">Anything not allowed here pauses the task and pings you. The task shows as <strong>Blocked</strong> until you approve or deny, in chat or from the Tasks panel.</p>
                 </div>

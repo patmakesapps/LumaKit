@@ -949,13 +949,18 @@ function addTaskCard(text, task) {
     }
 
     const allowLabel = task.action_label || task.action_key || '';
-    const decisionButtons = event === 'approval'
-        ? '<button class="confirm-btn confirm-no" data-task-action="deny">Deny</button>'
-          + (task.action_key
-              ? `<button class="confirm-btn confirm-no" data-task-action="allow" title="Also allow ${escapeHtml(allowLabel)} for the rest of this task">Allow for this task</button>`
-              : '')
-          + '<button class="confirm-btn confirm-yes" data-task-action="approve">Approve once</button>'
-        : '';
+    let decisionButtons = '';
+    if (event === 'approval') {
+        decisionButtons = '<button class="confirm-btn confirm-no" data-task-action="deny">Deny</button>'
+            + (task.action_key
+                ? `<button class="confirm-btn confirm-no" data-task-action="allow" title="Also allow ${escapeHtml(allowLabel)} for the rest of this task">Allow for this task</button>`
+                : '')
+            + '<button class="confirm-btn confirm-yes" data-task-action="approve">Approve once</button>';
+    } else if (event === 'started') {
+        // Tasks typed in chat have nothing pre-approved; give them the same
+        // one-click path as the New Task form.
+        decisionButtons = '<button class="confirm-btn confirm-yes" data-task-action="allow-all" title="Let this task run protected actions (commits, pushes, deletes, LumaBot power) without pausing">Allow all for this task</button>';
+    }
     card.innerHTML = `
         <div class="task-card-head">
             <span class="task-card-kind">Task #${escapeHtml(String(taskId))}</span>
@@ -979,15 +984,25 @@ function addTaskCard(text, task) {
             const buttons = card.querySelectorAll('[data-task-action]');
             buttons.forEach(b => { b.disabled = true; });
             try {
-                const endpoint = action === 'allow' ? 'approve' : action;
-                const res = await fetch(`/api/tasks/${taskId}/${endpoint}`, action === 'allow'
-                    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'task' }) }
-                    : { method: 'POST' });
+                let res;
+                if (action === 'allow-all') {
+                    await loadTaskActionCatalog();
+                    res = await fetch(`/api/tasks/${taskId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ allowed_actions: taskActionCatalog.map(a => a.key) }),
+                    });
+                } else {
+                    const endpoint = action === 'allow' ? 'approve' : action;
+                    res = await fetch(`/api/tasks/${taskId}/${endpoint}`, action === 'allow'
+                        ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'task' }) }
+                        : { method: 'POST' });
+                }
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.error || `HTTP ${res.status}`);
                 }
-                markTaskCardResolved(card, action === 'approve' ? 'approved' : action === 'allow' ? 'allowed' : 'denied');
+                markTaskCardResolved(card, action === 'approve' ? 'approved' : action === 'deny' ? 'denied' : 'allowed');
             } catch (e) {
                 buttons.forEach(b => { b.disabled = false; });
                 card.classList.add('errored');
@@ -1006,14 +1021,18 @@ function addTaskCard(text, task) {
 function markTaskCardResolved(card, resolution) {
     card.classList.remove('errored');
     card.classList.add('resolved', resolution);
-    card.querySelectorAll('[data-task-action="approve"], [data-task-action="allow"], [data-task-action="deny"]').forEach(b => b.remove());
+    card.querySelectorAll('[data-task-action="approve"], [data-task-action="allow"], [data-task-action="allow-all"], [data-task-action="deny"]').forEach(b => b.remove());
     const status = card.querySelector('.task-card-status');
     if (status) {
-        status.textContent = resolution === 'approved'
-            ? 'Approved once. The task is resuming.'
-            : resolution === 'allowed'
-                ? 'Allowed for the rest of this task. The task is resuming.'
-                : 'Denied. The task will continue without it.';
+        if (card.dataset.event === 'started') {
+            status.textContent = 'All protected actions are allowed for this task.';
+        } else {
+            status.textContent = resolution === 'approved'
+                ? 'Approved once. The task is resuming.'
+                : resolution === 'allowed'
+                    ? 'Allowed for the rest of this task. The task is resuming.'
+                    : 'Denied. The task will continue without it.';
+        }
     }
 }
 
@@ -1668,6 +1687,12 @@ function renderTaskDetail(task) {
 
         <section class="task-panel-section">
             <h4>Allowed without asking</h4>
+            <label class="task-permission task-permission-all">
+                <input type="checkbox" data-permission-all ${isTerminal ? 'disabled' : ''}>
+                <span class="task-permission-main">
+                    <span class="task-permission-label">Allow all protected actions</span>
+                </span>
+            </label>
             <div class="task-permissions">${renderPermissionRows(allowedActions, 'data-permission', !isTerminal)}</div>
             <p class="task-permissions-note">Anything else that is protected pauses the task and pings you.</p>
         </section>
@@ -1682,9 +1707,12 @@ function renderTaskDetail(task) {
     $taskPanelBody.querySelectorAll('[data-action]').forEach(btn => {
         btn.onclick = () => handleTaskAction(task.id, btn.dataset.action);
     });
-    $taskPanelBody.querySelectorAll('[data-permission]').forEach(box => {
-        box.onchange = () => updateTaskPermissions(task.id);
-    });
+    wirePermissionMaster(
+        $taskPanelBody,
+        $taskPanelBody.querySelector('[data-permission-all]'),
+        '[data-permission]',
+        () => updateTaskPermissions(task.id),
+    );
 
     // Live human-readable previews for the datetime inputs.
     $taskPanelBody.querySelectorAll('[data-preview]').forEach(input => {
@@ -1945,6 +1973,28 @@ function renderPermissionRows(selected, attr, editable) {
         </label>`).join('');
 }
 
+// Keep an "allow all" master checkbox and its rows in sync. onChange fires
+// after any user-driven change.
+function wirePermissionMaster(container, master, rowSelector, onChange) {
+    if (!container || !master) return;
+    const rows = () => [...container.querySelectorAll(rowSelector)];
+    const syncMaster = () => {
+        const all = rows();
+        master.checked = all.length > 0 && all.every(r => r.checked);
+    };
+    master.onchange = () => {
+        rows().forEach(r => { r.checked = master.checked; });
+        if (onChange) onChange();
+    };
+    rows().forEach(r => {
+        r.addEventListener('change', () => {
+            syncMaster();
+            if (onChange) onChange();
+        });
+    });
+    syncMaster();
+}
+
 async function updateTaskPermissions(taskId) {
     const keys = [...$taskPanelBody.querySelectorAll('[data-permission]:checked')]
         .map(el => el.dataset.permission);
@@ -1979,6 +2029,7 @@ async function openNewTaskModal() {
     if ($perms) {
         await loadTaskActionCatalog();
         $perms.innerHTML = renderPermissionRows([], 'data-new-permission', true);
+        wirePermissionMaster($newTaskForm, document.getElementById('new-task-allow-all'), '[data-new-permission]');
     }
 }
 function closeNewTaskModal() {
@@ -2661,7 +2712,8 @@ const ws = new WS({
     },
 
     task_approval_resolved(data) {
-        document.querySelectorAll(`.task-card[data-task-id="${data.task_id}"][data-event="approval"]`)
+        const event = data.event || 'approval';
+        document.querySelectorAll(`.task-card[data-task-id="${data.task_id}"][data-event="${event}"]`)
             .forEach(card => markTaskCardResolved(card, data.resolution));
     },
 

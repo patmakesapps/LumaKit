@@ -2350,6 +2350,12 @@ body {
     font-weight: 400;
 }
 
+.task-permission-all {
+    margin-bottom: 6px;
+    border-color: rgba(176, 124, 216, 0.35);
+    background: rgba(107, 63, 160, 0.12);
+}
+
 .task-permissions-note {
     margin: 4px 0 0;
     font-size: 12px;

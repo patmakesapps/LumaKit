@@ -495,6 +495,14 @@ async def api_runner_health():
     }
 
 
+@app.get("/api/tasks/actions")
+async def api_task_action_catalog():
+    """Protected actions a task can be pre-approved for (New Task form,
+    task panel permissions)."""
+    from core.approval_policy import task_action_catalog
+    return task_action_catalog()
+
+
 @app.get("/api/tasks/{task_id}")
 async def api_get_task(task_id: int):
     task = task_store.get_task(task_id)
@@ -504,14 +512,6 @@ async def api_get_task(task_id: int):
 
 
 _TASK_PATCHABLE = {"title", "goal", "due_at", "next_run_at"}
-
-
-@app.get("/api/tasks/actions")
-async def api_task_action_catalog():
-    """Protected actions a task can be pre-approved for (New Task form,
-    task panel permissions)."""
-    from core.approval_policy import task_action_catalog
-    return task_action_catalog()
 
 
 @app.post("/api/tasks")
@@ -563,7 +563,11 @@ async def api_update_task(task_id: int, payload: dict):
         task_store.update_task(task_id, **fields)
     if permissions is not None:
         from core import task_approvals
-        task_approvals.set_allowed_actions(task_id, permissions if isinstance(permissions, list) else [])
+        from core.approval_policy import TASK_ACTION_GRANTS
+        keys = task_approvals.set_allowed_actions(task_id, permissions if isinstance(permissions, list) else [])
+        if set(keys) == set(TASK_ACTION_GRANTS):
+            # "Allow all" from the started card: retire that card's button.
+            _resolve_task_cards(task_id, "allowed", event="started")
     return task_store.get_task(task_id)
 
 
@@ -1004,16 +1008,17 @@ def _persist_task_event(meta: dict, text: str) -> str | None:
     return chat_id
 
 
-def _resolve_task_cards(task_id: int, resolution: str) -> None:
-    """Mark a task's pending-approval card as approved/denied wherever it is
-    stored (live sessions and the saved chat) and tell open clients."""
+def _resolve_task_cards(task_id: int, resolution: str, event: str = "approval") -> None:
+    """Mark a task's card for *event* (approval by default, or the started
+    card after "allow all") as resolved wherever it is stored (live sessions
+    and the saved chat) and tell open clients."""
     def _mark(messages) -> bool:
         changed = False
         for m in messages or []:
             t = m.get("task") if isinstance(m, dict) else None
             if (
                 t and int(t.get("task_id") or 0) == int(task_id)
-                and t.get("event") == "approval" and not t.get("resolution")
+                and t.get("event") == event and not t.get("resolution")
             ):
                 t["resolution"] = resolution
                 changed = True
@@ -1038,7 +1043,8 @@ def _resolve_task_cards(task_id: int, resolution: str) -> None:
     with _web_clients_lock:
         callbacks = [cb for clients in _web_clients.values() for cb in clients]
     for cb in callbacks:
-        cb({"type": "task_approval_resolved", "task_id": int(task_id), "resolution": resolution})
+        cb({"type": "task_approval_resolved", "task_id": int(task_id),
+            "resolution": resolution, "event": event})
 
 
 # Plain replies that resolve a task's pending approval without a model call —
