@@ -103,6 +103,16 @@ def _create_task(inputs: dict) -> dict:
     owner = inputs.get("owner_chat_id") or str(_get_active_user() or "")
     start_at = inputs.get("start_at") or None
     workspace_path = str(get_repo_root().resolve(strict=False))
+    # Remember which chat the task came from so its lifecycle events (approval
+    # requests, completion) land back in that conversation.
+    if owner:
+        try:
+            from core.chat_store import get_active_chat
+            origin_chat = get_active_chat(owner)
+        except Exception:
+            origin_chat = None
+        if origin_chat:
+            constraints["_origin_chat"] = str(origin_chat)
 
     task_id = task_store.create_task(
         title=inputs["title"],
@@ -221,6 +231,8 @@ def _get_task_status(inputs: dict) -> dict:
     # Derive a human-readable detail of *why* the task is in its current state.
     # The chat agent should quote this verbatim instead of inventing schedule
     # text, since next_run_at moves silently on retry.
+    from core.task_approvals import pending_approval
+    pending = pending_approval(task) if task["status"] == "blocked" else None
     runtime_retries = int(current_step_obj.get("runtime_retries", 0) or 0)
     last_runtime_error = current_step_obj.get("last_runtime_error") or ""
     next_run_at = task.get("next_run_at") or ""
@@ -237,6 +249,13 @@ def _get_task_status(inputs: dict) -> dict:
         )
     elif task["status"] == "planning":
         state_detail = f"Plan is being generated. Next attempt at {next_run_at}."
+    elif task["status"] == "blocked" and pending:
+        state_detail = (
+            f"Blocked: waiting for the owner to approve running {pending.get('tool')} "
+            f"({pending.get('summary')}). The task runner resumes it automatically once "
+            "they approve or deny — by replying yes/no in chat or with the buttons on "
+            "the task card / Tasks panel. Do not do this work yourself."
+        )
     elif task["status"] == "blocked":
         state_detail = "Blocked waiting for user input."
     elif task["status"] == "paused":
@@ -250,6 +269,7 @@ def _get_task_status(inputs: dict) -> dict:
         "goal": task["goal"],
         "status": task["status"],
         "state_detail": state_detail,
+        "pending_approval": pending,
         "due_at": task.get("due_at"),
         "workspace_path": task.get("workspace_path") or "",
         "current_step": f"{step_idx+1}/{len(plan)}" if plan else "N/A",

@@ -900,6 +900,114 @@ function getLastUserMessage() {
     return messages.length ? messages[messages.length - 1] : null;
 }
 
+// --- Task cards: lifecycle events from the background task runner ---
+// Persisted in the chat transcript (see surfaces/web.py _persist_task_event)
+// so they render again on reload, with any approval decision already applied.
+const TASK_EVENT_LABELS = {
+    started: 'Started',
+    approval: 'Needs approval',
+    waiting: 'Waiting',
+    retry: 'Retrying',
+    blocked: 'Blocked',
+    failed: 'Failed',
+    done: 'Done',
+};
+
+function addTaskCard(text, task) {
+    if ($emptyState && !$emptyState.classList.contains('hidden')) {
+        dismissEmptyState();
+    }
+    removeStatus();
+
+    const event = task.event || 'update';
+    const taskId = task.task_id;
+    const div = document.createElement('div');
+    div.className = 'message assistant task-card-message';
+    div.dataset.role = 'assistant';
+
+    const card = document.createElement('div');
+    card.className = `task-card event-${event}`;
+    card.dataset.taskId = String(taskId);
+    card.dataset.event = event;
+
+    let body = '';
+    if (event === 'approval') {
+        body = `<div class="task-card-text">Wants to run <code>${escapeHtml(task.tool || '')}</code>. The task is paused until you decide.</div>`
+            + (task.summary ? `<div class="task-card-detail">${escapeHtml(task.summary)}</div>` : '');
+    } else if (event === 'done' || event === 'failed' || event === 'blocked') {
+        const files = Array.isArray(task.files_changed) ? task.files_changed : [];
+        body = `<div class="task-card-text">${renderMarkdown(task.report || text || '')}</div>`
+            + (files.length
+                ? `<div class="task-card-files"><span>Files changed</span>${files.map(f => `<code>${escapeHtml(f)}</code>`).join('')}</div>`
+                : '');
+    } else if (event === 'waiting') {
+        body = `<div class="task-card-text">${escapeHtml(task.reason || text || '')}</div>`;
+    } else if (event === 'started') {
+        body = `<div class="task-card-text">${escapeHtml(task.goal || text || '')}</div>`;
+    } else {
+        body = `<div class="task-card-text">${renderMarkdown(text || '')}</div>`;
+    }
+
+    const decisionButtons = event === 'approval'
+        ? '<button class="confirm-btn confirm-no" data-task-action="deny">Deny</button>'
+          + '<button class="confirm-btn confirm-yes" data-task-action="approve">Approve once</button>'
+        : '';
+    card.innerHTML = `
+        <div class="task-card-head">
+            <span class="task-card-kind">Task #${escapeHtml(String(taskId))}</span>
+            <span class="task-card-title">${escapeHtml(task.title || '')}</span>
+            <span class="task-card-chip">${escapeHtml(TASK_EVENT_LABELS[event] || 'Update')}</span>
+        </div>
+        <div class="task-card-body">${body}</div>
+        <div class="task-card-actions">
+            <button class="task-card-link" data-task-action="open">Open task</button>
+            ${decisionButtons}
+        </div>
+        <div class="task-card-status"></div>`;
+
+    card.querySelectorAll('[data-task-action]').forEach(btn => {
+        btn.onclick = async () => {
+            const action = btn.dataset.taskAction;
+            if (action === 'open') {
+                openTaskDetail(taskId);
+                return;
+            }
+            const buttons = card.querySelectorAll('[data-task-action]');
+            buttons.forEach(b => { b.disabled = true; });
+            try {
+                const res = await fetch(`/api/tasks/${taskId}/${action}`, { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || `HTTP ${res.status}`);
+                }
+                markTaskCardResolved(card, action === 'approve' ? 'approved' : 'denied');
+            } catch (e) {
+                buttons.forEach(b => { b.disabled = false; });
+                card.classList.add('errored');
+                card.querySelector('.task-card-status').textContent = `Could not ${action}: ${e.message}`;
+            }
+        };
+    });
+
+    if (task.resolution) markTaskCardResolved(card, task.resolution);
+    div.appendChild(card);
+    enhanceCodeBlocks(div);
+    $messagesInner.appendChild(div);
+    scrollToBottom();
+}
+
+function markTaskCardResolved(card, resolution) {
+    card.classList.remove('errored');
+    card.classList.add('resolved', resolution);
+    card.querySelectorAll('[data-task-action="approve"], [data-task-action="deny"]').forEach(b => b.remove());
+    const status = card.querySelector('.task-card-status');
+    if (status) {
+        status.textContent = resolution === 'approved'
+            ? 'Approved once. The task is resuming.'
+            : 'Denied. The task will continue without it.';
+    }
+}
+
 function addReactionToLatestUserMessage(emoji) {
     if (!emoji) return;
     const message = getLastUserMessage();
@@ -1075,6 +1183,10 @@ function renderChatMessages(messages) {
         if (msg.role === 'system') continue;
         if (msg.role === 'tool') {
             restoreRichToolMessage(msg);
+            continue;
+        }
+        if (msg.task) {
+            addTaskCard(msg.content || '', msg.task);
             continue;
         }
         if (msg.role === 'user' || msg.role === 'assistant') {
@@ -2448,7 +2560,16 @@ const ws = new WS({
     },
 
     message(data) {
+        if (data.task) {
+            addTaskCard(data.text, data.task);
+            return;
+        }
         addBackgroundMessage(data);
+    },
+
+    task_approval_resolved(data) {
+        document.querySelectorAll(`.task-card[data-task-id="${data.task_id}"][data-event="approval"]`)
+            .forEach(card => markTaskCardResolved(card, data.resolution));
     },
 
     reminder(data) {

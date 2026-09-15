@@ -2073,6 +2073,169 @@ body {
 }
 
 .confirm-card-status.approved { color: var(--success); }
+
+/* ===== Task cards (background task lifecycle events in the chat) ===== */
+
+.task-card {
+    margin: 10px 0 14px;
+    max-width: 560px;
+    background: linear-gradient(180deg, #1e1733 0%, #1a1428 100%);
+    border: 1px solid var(--accent-deep);
+    border-radius: var(--radius);
+    box-shadow: 0 2px 16px rgba(107, 63, 160, 0.18);
+    overflow: hidden;
+    animation: fadeIn 0.2s ease;
+}
+
+.task-card.event-approval {
+    border-color: rgba(251, 191, 36, 0.6);
+    box-shadow: 0 2px 16px rgba(245, 158, 11, 0.16);
+}
+
+.task-card.resolved {
+    border-color: var(--border);
+    box-shadow: none;
+}
+
+.task-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: rgba(107, 63, 160, 0.08);
+}
+
+.task-card-kind {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-light);
+    white-space: nowrap;
+}
+
+.task-card-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.task-card-chip {
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.task-card.event-approval .task-card-chip {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fde68a;
+}
+
+.task-card.event-done .task-card-chip {
+    background: rgba(34, 197, 94, 0.18);
+    color: #bbf7d0;
+}
+
+.task-card.event-failed .task-card-chip,
+.task-card.event-blocked .task-card-chip {
+    background: rgba(220, 38, 38, 0.18);
+    color: #fecaca;
+}
+
+.task-card-body {
+    padding: 10px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+
+.task-card-text p:last-child {
+    margin-bottom: 0;
+}
+
+.task-card-text code {
+    font-size: 12px;
+}
+
+.task-card-detail {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    word-break: break-all;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.task-card-files {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.task-card-files code {
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg-primary);
+    font-size: 11px;
+}
+
+.task-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.task-card-link {
+    margin-right: auto;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--accent-light);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.task-card-link:hover {
+    background: var(--bg-hover);
+}
+
+.task-card-status {
+    display: none;
+    padding: 8px 14px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.task-card.resolved .task-card-status,
+.task-card.errored .task-card-status {
+    display: block;
+}
+
+.task-card.resolved.approved .task-card-status { color: var(--success); }
+.task-card.resolved.denied .task-card-status { color: var(--text-secondary); }
+.task-card.errored .task-card-status { color: var(--error); }
 .confirm-card-status.denied { color: var(--text-muted); }
 
 .email-confirm-card {

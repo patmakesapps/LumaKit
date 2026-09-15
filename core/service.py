@@ -182,12 +182,27 @@ class LumaKitService:
         self._reminders = ReminderChecker(interval=self._reminder_interval, notify=on_reminder)
         self._reminders.start()
 
-        def on_task(msg, chat_id=None):
+        def on_task(msg, chat_id=None, meta=None):
+            meta = dict(meta or {})
+            is_task_event = meta.get("kind") == "task"
+            # Log first so a ping nobody was around to see is replayed on the
+            # next surface the user opens (the web chat persists task events
+            # into the transcript and marks the log entry shown).
+            notification_id = notifications.log(
+                content=msg,
+                label="",
+                user_id=chat_id or auth.get_owner(),
+                meta=meta,
+            )
             self.router.route({
                 "content": msg,
                 "label": "",
                 "chat_id": chat_id,
-                "target": "auto",
+                # Task lifecycle events go to every surface: the phone ping
+                # AND the chat card, not one or the other.
+                "target": "both" if is_task_event else "auto",
+                "notification_id": notification_id,
+                "meta": meta,
             })
 
         self._tasks = TaskRunner(interval=self._task_interval, notify=on_task)

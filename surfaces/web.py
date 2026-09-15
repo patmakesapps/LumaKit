@@ -523,9 +523,11 @@ async def api_create_task(payload: dict):
             return JSONResponse({"error": str(exc)}, status_code=400)
     else:
         workspace_path = str(_default_workspace())
+    origin_chat = get_active_chat(WEB_USER_ID)
     task_id = task_store.create_task(
         title=title,
         goal=goal,
+        constraints={"_origin_chat": origin_chat} if origin_chat else None,
         owner_chat_id=WEB_USER_ID,
         due_at=due_at,
         start_at=start_at,
@@ -584,6 +586,7 @@ async def api_approve_task(task_id: int):
     ok, message = task_approvals.approve(task_id)
     if not ok:
         return JSONResponse({"error": message}, status_code=400)
+    _resolve_task_cards(task_id, "approved")
     return task_store.get_task(task_id)
 
 
@@ -593,6 +596,7 @@ async def api_deny_task(task_id: int):
     ok, message = task_approvals.deny(task_id)
     if not ok:
         return JSONResponse({"error": message}, status_code=400)
+    _resolve_task_cards(task_id, "denied")
     return task_store.get_task(task_id)
 
 
@@ -795,6 +799,8 @@ def _notification_to_web_event(notification: dict) -> dict:
             "type": "message",
             "text": notification.get("content", ""),
         }
+        if meta.get("kind") == "task":
+            event["task"] = dict(meta)
         if meta.get("kind"):
             event["kind"] = meta["kind"]
         if meta.get("email"):
@@ -922,9 +928,134 @@ def _prepare_web_turn(agent: Agent, session: dict):
     apply_user_runtime(agent, session, WEB_USER_ID, surface="web")
 
 
+# Live per-connection chat sessions, keyed by websocket id, so background
+# events (task cards) can be appended to the transcript the user is looking
+# at instead of only being pushed over the socket and lost on reload.
+_web_sessions: dict[int, dict] = {}
+
+
 def _register_web_client(user_id: str, send_fn):
     with _web_clients_lock:
         _web_clients.setdefault(str(user_id), set()).add(send_fn)
+
+
+def _task_chat_id(meta: dict) -> str | None:
+    """The web chat a task's events belong in: the chat it was created from,
+    else the user's current chat."""
+    task_id = meta.get("task_id")
+    origin = None
+    if task_id is not None:
+        task = task_store.get_task(int(task_id))
+        constraints = (task or {}).get("constraints") or {}
+        if isinstance(constraints, str):
+            try:
+                constraints = json.loads(constraints)
+            except (TypeError, json.JSONDecodeError):
+                constraints = {}
+        origin = (constraints or {}).get("_origin_chat")
+    return str(origin) if origin else get_active_chat(WEB_USER_ID)
+
+
+def _persist_task_event(meta: dict, text: str) -> str | None:
+    """Write a task event into its chat transcript so it survives reload.
+    Returns the chat id it landed in, or None if there was nowhere to put it."""
+    chat_id = _task_chat_id(meta)
+    if not chat_id:
+        return None
+    entry = timestamp_message({"role": "assistant", "content": text, "task": dict(meta)})
+    live = [s for s in list(_web_sessions.values()) if s.get("chat_id") == chat_id]
+    if live:
+        for s in live:
+            s.setdefault("display_messages", []).append(dict(entry))
+        primary = next((s for s in live if s.get("first_message_sent")), None)
+        if primary:
+            _save_web_chat(primary)
+        return chat_id
+    chat = load_chat(chat_id, owner_id=WEB_USER_ID)
+    if not chat:
+        return None
+    display = list(chat.get("display_messages") or [])
+    display.append(entry)
+    save_chat(
+        chat["id"], chat["title"], chat["messages"],
+        owner_id=WEB_USER_ID, display_messages=display,
+    )
+    return chat_id
+
+
+def _resolve_task_cards(task_id: int, resolution: str) -> None:
+    """Mark a task's pending-approval card as approved/denied wherever it is
+    stored (live sessions and the saved chat) and tell open clients."""
+    def _mark(messages) -> bool:
+        changed = False
+        for m in messages or []:
+            t = m.get("task") if isinstance(m, dict) else None
+            if (
+                t and int(t.get("task_id") or 0) == int(task_id)
+                and t.get("event") == "approval" and not t.get("resolution")
+            ):
+                t["resolution"] = resolution
+                changed = True
+        return changed
+
+    touched: set[str] = set()
+    for s in list(_web_sessions.values()):
+        if _mark(s.get("display_messages")):
+            touched.add(str(s.get("chat_id")))
+            if s.get("first_message_sent"):
+                _save_web_chat(s)
+    chat_id = _task_chat_id({"task_id": task_id})
+    if chat_id and chat_id not in touched:
+        chat = load_chat(chat_id, owner_id=WEB_USER_ID)
+        if chat:
+            display = list(chat.get("display_messages") or [])
+            if _mark(display):
+                save_chat(
+                    chat["id"], chat["title"], chat["messages"],
+                    owner_id=WEB_USER_ID, display_messages=display,
+                )
+    with _web_clients_lock:
+        callbacks = [cb for clients in _web_clients.values() for cb in clients]
+    for cb in callbacks:
+        cb({"type": "task_approval_resolved", "task_id": int(task_id), "resolution": resolution})
+
+
+# Plain replies that resolve a task's pending approval without a model call —
+# the same idea as the email draft yes/no fast path.
+_TASK_APPROVE = frozenset({
+    "1", "yes", "y", "yep", "yeah", "yup", "ok", "okay", "approve", "approved",
+    "allow", "go", "go ahead", "do it", "sure",
+})
+_TASK_DENY = frozenset({
+    "2", "no", "n", "nope", "deny", "denied", "don't", "dont", "cancel", "skip", "refuse",
+})
+_TASK_CMD_RE = re.compile(r"^/(approve|deny)\s+(\d+)\s*$", re.IGNORECASE)
+
+
+def _pending_approval_task() -> dict | None:
+    """The most recent task blocked on an owner approval, if any."""
+    from core.task_approvals import pending_approval
+    candidates = [
+        t for t in task_store.get_all_tasks(limit=50)
+        if t.get("status") == "blocked" and pending_approval(t)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda t: int(t.get("id") or 0))
+
+
+def _task_approval_reply(text: str) -> tuple[str, int] | None:
+    """('approve'|'deny', task_id) if this chat message is an answer to a
+    pending task approval, else None."""
+    normalized = " ".join(str(text or "").strip().lower().split())
+    match = _TASK_CMD_RE.match(normalized)
+    if match:
+        return match.group(1).lower(), int(match.group(2))
+    if normalized in _TASK_APPROVE or normalized in _TASK_DENY:
+        task = _pending_approval_task()
+        if task:
+            return ("approve" if normalized in _TASK_APPROVE else "deny"), int(task["id"])
+    return None
 
 
 def _unregister_web_client(user_id: str, send_fn):
@@ -949,6 +1080,8 @@ def _web_deliver(payload: dict) -> bool:
     label = payload.get("label") or ""
     web_user_id = payload.get("web_user_id")
     chat_id = str(web_user_id or payload.get("chat_id") or WEB_USER_ID)
+    meta = payload.get("meta") or {}
+    is_task_event = meta.get("kind") == "task"
     with _web_clients_lock:
         if label and web_user_id is None:
             callbacks = [cb for clients in _web_clients.values() for cb in clients]
@@ -962,20 +1095,31 @@ def _web_deliver(payload: dict) -> bool:
         else:
             callbacks = list(_web_clients.get(chat_id, set()))
 
-    if not callbacks:
+    persisted = None
+    if is_task_event:
+        # Task events become part of the chat transcript (cards), so they
+        # survive reload even when no tab was open to receive the push.
+        try:
+            persisted = _persist_task_event(meta, content)
+        except Exception as exc:
+            from core import log
+            log.warn("web", "could not persist task event into chat", exc)
+
+    if not callbacks and not persisted:
         return False
 
     if label:
         msg = {"type": "reminder", "text": content, "label": label}
     else:
         msg = {"type": "message", "text": content}
-        meta = payload.get("meta") or {}
         if meta.get("kind"):
             msg["kind"] = meta["kind"]
         if meta.get("email"):
             msg["email"] = meta["email"]
         if meta.get("draft_id") is not None:
             msg["draft_id"] = meta["draft_id"]
+        if is_task_event:
+            msg["task"] = dict(meta)
     for callback in callbacks:
         callback(msg)
     notification_id = payload.get("notification_id")
@@ -1223,6 +1367,7 @@ async def websocket_chat(ws: WebSocket):
         }
     _prepare_web_turn(agent, session)
     set_active_chat(WEB_USER_ID, session["chat_id"])
+    _web_sessions[ws_id] = session
 
     if resumed:
         await ws.send_json({
@@ -1526,6 +1671,26 @@ async def websocket_chat(ws: WebSocket):
                     continue
 
                 normalized = text.lower()
+                task_reply = None if image_data else _task_approval_reply(text)
+                if task_reply:
+                    # "1" / "yes" / "/approve 3" answers the pending task
+                    # approval directly — it must never reach the chat model,
+                    # which would otherwise try to do the task's work itself.
+                    from core import task_approvals
+                    action, target_id = task_reply
+                    decide = task_approvals.approve if action == "approve" else task_approvals.deny
+                    ok, message = decide(target_id)
+                    if ok:
+                        _resolve_task_cards(target_id, "approved" if action == "approve" else "denied")
+                        reply = message
+                    else:
+                        reply = f"Couldn't {action} task #{target_id}: {message}"
+                    _append_display_message(session, "user", text)
+                    _append_display_message(session, "assistant", reply)
+                    if session.get("first_message_sent"):
+                        _save_web_chat(session)
+                    await ws.send_json({"type": "response", "text": reply, "run_state": "completed"})
+                    continue
                 if not image_data and normalized in _EMAIL_AFFIRM and email_draft_store.get_latest_pending():
                     await ws.send_json(_handle_email_draft_action("approve"))
                     continue
@@ -1566,6 +1731,7 @@ async def websocket_chat(ws: WebSocket):
         pass
     finally:
         ws_closed["v"] = True
+        _web_sessions.pop(ws_id, None)
         _unregister_web_client(WEB_USER_ID, send_sync)
         # Cancel any in-flight agent task
         if agent_task and not agent_task.done():

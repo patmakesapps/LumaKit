@@ -26,6 +26,7 @@ Each task is ONE continuous agent session:
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -59,6 +60,18 @@ RETRYABLE_STEP_RUNTIME_RE = re.compile(
     r"connection refused|connection reset|timed out|timeout",
     re.IGNORECASE,
 )
+
+
+def _notify_accepts_meta(callback) -> bool:
+    """True if a notify callback can take (msg, chat_id, meta). Older
+    callbacks (and test lambdas) take just (msg, chat_id)."""
+    try:
+        params = list(inspect.signature(callback).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
+        return True
+    return len(params) >= 3
 
 
 def _summarize_tool_args(name: str | None, inputs: dict) -> str:
@@ -136,6 +149,7 @@ class TaskRunner:
     ):
         self._interval = interval
         self._notify = notify or (lambda msg, cid: print(f"[task] {msg}"))
+        self._notify_takes_meta = _notify_accepts_meta(self._notify)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._task_locks: dict[int, threading.Lock] = {}
@@ -166,6 +180,26 @@ class TaskRunner:
         _active_runner = self
         self._thread = threading.Thread(target=self._loop, daemon=True, name="task-runner")
         self._thread.start()
+
+    def _notify_event(self, task: dict, event: str, text: str, **extra) -> None:
+        """Tell the owner about a task lifecycle event.
+
+        Surfaces that accept metadata (the web chat renders cards, the
+        notification log keeps the structured event) get ``meta``; a plain
+        (msg, chat_id) callback just gets the text.
+        """
+        chat_id = task.get("owner_chat_id")
+        if not self._notify_takes_meta:
+            self._notify(text, chat_id)
+            return
+        meta = {
+            "kind": "task",
+            "task_id": task["id"],
+            "title": task.get("title") or "",
+            "event": event,
+        }
+        meta.update(extra)
+        self._notify(text, chat_id, meta)
 
     def _log_catch_up(self) -> None:
         due = task_store.get_due_tasks()
@@ -264,10 +298,11 @@ class TaskRunner:
             title=task["title"], goal=task_trace.preview(task["goal"], 1000),
             constraints=constraints or None, workspace=str(get_repo_root()),
         )
-        self._notify(
+        self._notify_event(
+            task, "started",
             f"Starting task: {task['title']}\n\nI'll work it start to finish and "
             "report back when it's done.",
-            task.get("owner_chat_id"),
+            goal=task_trace.preview(task["goal"], 500),
         )
 
         fresh = task_store.get_task(task_id)
@@ -716,11 +751,12 @@ class TaskRunner:
         task_trace.record(task_id, "wait", reason=task_trace.preview(reason, 300),
                           resume_at=resume_at, wait_count=wait_count)
         if wait_count == 1:
-            self._notify(
+            self._notify_event(
+                task, "waiting",
                 f"Task '{task['title']}' is waiting on something external before it "
                 f"can continue: {reason}\n\nIt'll resume on its own around "
                 f"{self._friendly_time(resume_at)}.",
-                task.get("owner_chat_id"),
+                reason=reason, resume_at=resume_at,
             )
         print(f"[task-runner] task {task_id} waiting until {resume_at}: {reason}")
 
@@ -730,12 +766,13 @@ class TaskRunner:
         record = task_approvals.request_approval(task, tool, inputs)
         task_trace.record(task["id"], "approval_requested", tool=tool,
                           summary=task_trace.preview(record.get("summary"), 300))
-        self._notify(
+        self._notify_event(
+            task, "approval",
             f"Task #{task['id']} '{task['title']}' needs your approval to run "
             f"{tool}:\n\n    {record['summary']}\n\n"
             f"Reply /approve {task['id']} to allow it once, or /deny {task['id']} "
             f"to refuse.\n{self._task_link(task['id'])}",
-            task.get("owner_chat_id"),
+            tool=tool, summary=record.get("summary") or "",
         )
         print(f"[task-runner] task {task['id']} blocked awaiting approval for {tool}")
 
@@ -771,29 +808,33 @@ class TaskRunner:
         )
         print(f"[task-runner] task {task_id} trace: {task_trace.trace_path(task_id)}")
 
+        files_changed = [str(p) for p in (constraints.get("_files_changed") or [])]
         if outcome == "blocked":
             task_store.update_task(task_id, status="blocked", result=report)
-            self._notify(
+            self._notify_event(
+                task, "blocked",
                 f"Task blocked: {task['title']}\n\n{report}\n\n"
                 "Reply with what you'd like me to do and I'll resume.\n"
                 f"{self._task_link(task_id)}",
-                task.get("owner_chat_id"),
+                report=report, files_changed=files_changed,
             )
             print(f"[task-runner] task {task_id} blocked")
             return
         files_suffix = f"\n\n{files_note}" if files_note else ""
         if outcome == "failed":
             task_store.fail_task(task_id, report)
-            self._notify(
+            self._notify_event(
+                task, "failed",
                 f"Task failed: {task['title']}\n\n{report}{files_suffix}\n{self._task_link(task_id)}",
-                task.get("owner_chat_id"),
+                report=report, files_changed=files_changed,
             )
             print(f"[task-runner] task {task_id} failed")
             return
         task_store.complete_task(task_id, report)
-        self._notify(
+        self._notify_event(
+            task, "done",
             f"Task complete: {task['title']}\n\n{report}{files_suffix}\n{self._task_link(task_id)}",
-            task.get("owner_chat_id"),
+            report=report, files_changed=files_changed,
         )
         print(f"[task-runner] task {task_id} done")
 
@@ -853,7 +894,8 @@ class TaskRunner:
             )
             task_store.fail_task(task_id, result)
             task_trace.record(task_id, "finished", outcome="failed", report=result, files_changed=[])
-            self._notify(f"Task failed: {task['title']}\n\n{result}", task.get("owner_chat_id"))
+            self._notify_event(task, "failed", f"Task failed: {task['title']}\n\n{result}",
+                               report=result, files_changed=[])
             return
 
         backoff_secs = [30, 30, 60, 120, 300, 600, 900, 900, 900, 900, 900, 900]
@@ -868,10 +910,11 @@ class TaskRunner:
                           backoff_seconds=secs)
         if retries in {1, 3, 6, 12}:
             wait_label = f"{secs}s" if secs < 60 else f"{secs // 60} minute(s)"
-            self._notify(
+            self._notify_event(
+                task, "retry",
                 f"Temporary runtime issue on task '{task['title']}'; retrying in "
                 f"{wait_label} instead of blocking.",
-                task.get("owner_chat_id"),
+                attempt=retries, reason=summary, backoff_seconds=secs,
             )
 
     def _clear_runtime_retries(self, task_id: int, task: dict) -> None:
