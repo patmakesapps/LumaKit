@@ -226,6 +226,8 @@ Optional extras:
 
 | Variable | Purpose |
 |---|---|
+| `LUMAKIT_TASK_TRACES` | Set to `0` to stop writing per-task execution traces to `~/.lumakit/traces/` |
+| `LUMAKIT_TRACE_RETENTION_DAYS` | Days to keep task traces before they are pruned (default `30`) |
 | `SERPAPI_KEY` | Premium web search |
 | `TELEGRAM_BOT_TOKEN` | Enable Telegram access |
 | `TELEGRAM_ALLOWED_IDS` | Authorize Telegram users; first ID is the owner, others get scoped roles |
@@ -264,6 +266,7 @@ What they do:
 - `lumakit cli` starts the terminal chat interface
 - `lumakit status` shows whether LumaKit is already running
 - `lumakit stop` stops the running backend
+- `lumakit trace [task_id]` lists autonomous task traces, or prints one task's round-by-round record (`--json` for the raw events)
 - `lumakit serve` runs the backend in the foreground for debugging
 - `lumakit shortcut install` installs the user-facing launcher
 - `lumakit service install --force` writes the Linux systemd unit for always-on mode

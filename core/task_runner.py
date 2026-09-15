@@ -35,7 +35,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from core import summarizer, task_store
+from core import summarizer, task_store, task_trace
 from core.approval_policy import autonomous_tool_refusal
 from core.paths import get_data_dir, get_repo_root, workspace_context
 from core.runtime_config import get_effective_config_for_user
@@ -159,6 +159,9 @@ class TaskRunner:
             self._log_catch_up()
         except Exception as e:
             print(f"[task-runner] catch-up scan failed: {e}")
+        removed = task_trace.prune()
+        if removed:
+            print(f"[task-runner] pruned {removed} old task trace(s)")
         global _active_runner
         _active_runner = self
         self._thread = threading.Thread(target=self._loop, daemon=True, name="task-runner")
@@ -255,6 +258,12 @@ class TaskRunner:
         task_store.update_task(task_id, status="active")
         task_store.save_session(task_id, messages, plan=[], current_step=0)
         task_store.append_history(task_id, {"type": "task_started"})
+        task_trace.reset(task_id)
+        task_trace.record(
+            task_id, "task_started",
+            title=task["title"], goal=task_trace.preview(task["goal"], 1000),
+            constraints=constraints or None, workspace=str(get_repo_root()),
+        )
         self._notify(
             f"Starting task: {task['title']}\n\nI'll work it start to finish and "
             "report back when it's done.",
@@ -298,6 +307,10 @@ class TaskRunner:
         cfg = self._model_config(task.get("owner_chat_id"))
         model = cfg["primary_model"]
         ollama.fallback_model = cfg.get("fallback_model")
+        task_trace.record(
+            task_id, "drive_started",
+            model=model, fallback=cfg.get("fallback_model"), tools=len(tools),
+        )
 
         while not self._stop.is_set():
             task = task_store.get_task(task_id)
@@ -317,6 +330,10 @@ class TaskRunner:
             ):
                 checkpoint()
                 task_store.update_task(task_id, next_run_at=datetime.now().isoformat())
+                task_trace.record(
+                    task_id, "yield", rounds=rounds,
+                    reason="round cap" if rounds >= self.MAX_ROUNDS_PER_DRIVE else "time budget",
+                )
                 print(f"[task-runner] task {task_id} yielding after {rounds} round(s); resumes next tick")
                 return
 
@@ -327,6 +344,7 @@ class TaskRunner:
                 return
 
             self._emit(task_id, "thinking", round=rounds + 1)
+            llm_started = time.monotonic()
             try:
                 response = ollama.chat(
                     model=model,
@@ -339,6 +357,11 @@ class TaskRunner:
                 )
             except Exception as e:
                 checkpoint()
+                task_trace.record(
+                    task_id, "llm_error", round=rounds + 1,
+                    latency_ms=round((time.monotonic() - llm_started) * 1000),
+                    reason=task_trace.preview(str(e), 300),
+                )
                 self._handle_runtime_error(task, f"LLM error during round: {e}")
                 return
 
@@ -349,6 +372,13 @@ class TaskRunner:
             message = response.get("message", {})
             messages.append(message)
             tool_calls = message.get("tool_calls", []) or []
+            task_trace.record(
+                task_id, "round", round=rounds,
+                latency_ms=round((time.monotonic() - llm_started) * 1000),
+                tool_calls=len(tool_calls),
+                text=task_trace.preview(message.get("content") or "", 300) if not tool_calls else "",
+                **task_trace.usage_from_response(response),
+            )
 
             if not tool_calls:
                 text = (message.get("content") or "").strip()
@@ -370,6 +400,10 @@ class TaskRunner:
                     # honestly only after repeated stuck cycles.
                     stuck = self._bump_stuck(task_id, task)
                     task_store.save_session(task_id, messages)
+                    task_trace.record(
+                        task_id, "stuck", cycle=stuck,
+                        remaining=task_trace.preview("; ".join(t.get("description", "") for t in incomplete), 300),
+                    )
                     if stuck >= self.MAX_STUCK_CYCLES:
                         remaining = "; ".join(t.get("description", "") for t in incomplete)
                         report = self._generate_report(task, "failed")
@@ -380,6 +414,8 @@ class TaskRunner:
 
                 nudges += 1
                 remaining = "; ".join(t.get("description", "") for t in incomplete[:5])
+                task_trace.record(task_id, "nudge", round=rounds, nudge=nudges,
+                                  remaining=task_trace.preview(remaining, 300))
                 messages.append({
                     "role": "user",
                     "content": (
@@ -417,7 +453,11 @@ class TaskRunner:
                         "role": "tool", "name": name,
                         "content": json.dumps({"success": False, "skipped": "task is finishing or pausing"}),
                     })
+                    task_trace.record(task_id, "tool_skipped", round=rounds, name=name,
+                                      reason="task is finishing or pausing")
                     continue
+
+                tool_started = time.monotonic()
 
                 # Protected actions pause the task for a cross-surface approval
                 # instead of being flatly refused (§6.3). A one-shot grant from
@@ -483,10 +523,9 @@ class TaskRunner:
                 if not result.get("success", True):
                     self._emit(task_id, "tool_error", tool=name or "?",
                                detail=str(result.get("error") or "")[:200])
-                messages.append({
-                    "role": "tool", "name": name,
-                    "content": self._tool_content_for_thread(result, name),
-                })
+                stored = self._tool_content_for_thread(result, name)
+                messages.append({"role": "tool", "name": name, "content": stored})
+                self._trace_tool(task_id, rounds, name, inputs, result, stored, tool_started)
 
             # Checkpoint every N rounds, and always before a state change.
             checkpoint(force=control is not None)
@@ -502,8 +541,11 @@ class TaskRunner:
                 return
 
             # Keep context bounded for long/multi-day tasks.
+            before_compact = len(messages)
             messages, compacted = self._maybe_compact(messages, model)
             if compacted:
+                task_trace.record(task_id, "compacted", round=rounds,
+                                  before=before_compact, after=len(messages))
                 checkpoint()
             # Loop immediately — drive to completion, no artificial gaps.
 
@@ -551,6 +593,32 @@ class TaskRunner:
             constraints["_files_changed_overflow"] = overflow
         constraints["_files_changed"] = seen
         task_store.update_task(task_id, constraints=json.dumps(constraints))
+
+    @staticmethod
+    def _trace_tool(task_id: int, round_no: int, name: str | None, inputs: dict,
+                    result: dict, stored: str, started: float) -> None:
+        """One trace line per executed tool call: what ran, how long, whether
+        it worked, and how much of the result the model actually got to see."""
+        try:
+            raw_chars = len(json.dumps(result, ensure_ascii=False, default=str))
+        except Exception:
+            raw_chars = len(str(result))
+        ok = bool(result.get("success", True)) if isinstance(result, dict) else True
+        fields = {
+            "round": round_no,
+            "name": name,
+            "args": task_trace.preview(inputs),
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "success": ok,
+            "result_chars": raw_chars,
+            "stored_chars": len(stored),
+            "trimmed": len(stored) < raw_chars,
+        }
+        if isinstance(result, dict) and result.get("error"):
+            fields["error"] = task_trace.preview(result.get("error"), task_trace.RESULT_PREVIEW_CHARS)
+        elif isinstance(result, dict):
+            fields["result"] = task_trace.preview(result.get("data", result), task_trace.RESULT_PREVIEW_CHARS)
+        task_trace.record(task_id, "tool", **fields)
 
     def _tool_content_for_thread(self, result: dict, tool_name: str | None = None) -> str:
         """Serialize a tool result for the persistent thread. Uses the same
@@ -645,6 +713,8 @@ class TaskRunner:
         task_store.append_history(task_id, {
             "type": "task_wait", "reason": reason, "resume_at": resume_at, "wait_count": wait_count,
         })
+        task_trace.record(task_id, "wait", reason=task_trace.preview(reason, 300),
+                          resume_at=resume_at, wait_count=wait_count)
         if wait_count == 1:
             self._notify(
                 f"Task '{task['title']}' is waiting on something external before it "
@@ -658,6 +728,8 @@ class TaskRunner:
         """Block the task on a pending approval and ping the owner (§6.3)."""
         from core import task_approvals
         record = task_approvals.request_approval(task, tool, inputs)
+        task_trace.record(task["id"], "approval_requested", tool=tool,
+                          summary=task_trace.preview(record.get("summary"), 300))
         self._notify(
             f"Task #{task['id']} '{task['title']}' needs your approval to run "
             f"{tool}:\n\n    {record['summary']}\n\n"
@@ -692,6 +764,12 @@ class TaskRunner:
         files_note = self._files_changed_note(constraints)
         if files_note:
             task_store.append_history(task_id, {"type": "files_changed", "detail": files_note})
+        task_trace.record(
+            task_id, "finished", outcome=outcome,
+            report=task_trace.preview(report, task_trace.REPORT_PREVIEW_CHARS),
+            files_changed=[str(p) for p in (constraints.get("_files_changed") or [])],
+        )
+        print(f"[task-runner] task {task_id} trace: {task_trace.trace_path(task_id)}")
 
         if outcome == "blocked":
             task_store.update_task(task_id, status="blocked", result=report)
@@ -774,6 +852,7 @@ class TaskRunner:
                 f"model/runtime was unavailable: {summary}"
             )
             task_store.fail_task(task_id, result)
+            task_trace.record(task_id, "finished", outcome="failed", report=result, files_changed=[])
             self._notify(f"Task failed: {task['title']}\n\n{result}", task.get("owner_chat_id"))
             return
 
@@ -785,6 +864,8 @@ class TaskRunner:
             "type": "step_retry", "attempt": retries, "reason": summary,
             "next_run_at": next_run, "backoff_seconds": secs,
         })
+        task_trace.record(task_id, "runtime_error", attempt=retries, reason=summary,
+                          backoff_seconds=secs)
         if retries in {1, 3, 6, 12}:
             wait_label = f"{secs}s" if secs < 60 else f"{secs // 60} minute(s)"
             self._notify(

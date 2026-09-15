@@ -747,6 +747,34 @@ def command_serve(args) -> int:
     return 0
 
 
+def command_trace(args) -> int:
+    """Print a task's execution trace, or list available traces."""
+    from core import task_trace
+
+    if args.task_id is None:
+        rows = task_trace.list_traces()
+        if not rows:
+            print(f"No task traces yet (they land in {task_trace.traces_dir()}).")
+            return 0
+        print(f"{'task':>6}  {'outcome':<12} {'size':>7}  {'updated':<16}  title")
+        for row in rows[: args.limit]:
+            size = f"{row['bytes'] / 1024:.0f}K"
+            print(f"{row['task_id']:>6}  {row['outcome']:<12} {size:>7}  {row['updated']:<16}  {row['title']}")
+        return 0
+
+    if args.json:
+        entries = task_trace.read(args.task_id)
+        if not entries:
+            print(f"No trace for task {args.task_id}.")
+            return 1
+        for entry in entries:
+            print(json.dumps(entry, ensure_ascii=False))
+        return 0
+
+    print(task_trace.render(args.task_id))
+    return 0 if task_trace.trace_path(args.task_id).exists() else 1
+
+
 def command_cli(args) -> int:
     os.chdir(INVOCATION_CWD)
     # Import lazily so the env loading at the top of this module runs before
@@ -780,6 +808,12 @@ def build_parser() -> argparse.ArgumentParser:
     stop = subparsers.add_parser("stop", help="stop the running backend")
     stop.add_argument("--timeout", type=float, default=15.0, help="seconds to wait for shutdown")
     stop.set_defaults(func=command_stop)
+
+    trace = subparsers.add_parser("trace", help="show an autonomous task's execution trace")
+    trace.add_argument("task_id", nargs="?", type=int, help="task id; omit to list traces")
+    trace.add_argument("--json", action="store_true", help="print the raw JSONL events")
+    trace.add_argument("--limit", type=int, default=25, help="how many traces to list")
+    trace.set_defaults(func=command_trace)
 
     service = subparsers.add_parser("service", help="generate or install service files for always-on mode")
     service_subparsers = service.add_subparsers(dest="service_command", required=True)
