@@ -151,6 +151,10 @@ class TaskRunner:
         self._notify = notify or (lambda msg, cid: print(f"[task] {msg}"))
         self._notify_takes_meta = _notify_accepts_meta(self._notify)
         self._stop = threading.Event()
+        # Set to cut the inter-tick sleep short: a new task, an approval, a
+        # resume. Without it every owner decision waited up to `interval`
+        # seconds before the task moved again.
+        self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._task_locks: dict[int, threading.Lock] = {}
         self._task_locks_guard = threading.Lock()
@@ -178,8 +182,24 @@ class TaskRunner:
             print(f"[task-runner] pruned {removed} old task trace(s)")
         global _active_runner
         _active_runner = self
+        task_store.subscribe(self._on_store_event)
         self._thread = threading.Thread(target=self._loop, daemon=True, name="task-runner")
         self._thread.start()
+
+    def wake(self) -> None:
+        """Run the next tick as soon as the current one finishes."""
+        self._wake.set()
+
+    def _on_store_event(self, event: dict) -> None:
+        """Task created, resumed, restarted, or approved → don't wait for the
+        next scheduled tick."""
+        kind = event.get("type")
+        if kind == "task_created":
+            self.wake()
+        elif kind == "task_updated" and event.get("status") in {"active", "planning"}:
+            self.wake()
+        elif kind == "task_updated" and "next_run_at" in (event.get("fields") or []):
+            self.wake()
 
     def _notify_event(self, task: dict, event: str, text: str, **extra) -> None:
         """Tell the owner about a task lifecycle event.
@@ -208,6 +228,8 @@ class TaskRunner:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
+        task_store.unsubscribe(self._on_store_event)
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
@@ -221,11 +243,14 @@ class TaskRunner:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            self._wake.clear()
             try:
                 self._tick()
             except Exception as e:
                 print(f"[task-runner] tick error: {e}")
-            self._stop.wait(self._interval)
+            # Sleep until the next scheduled tick, or until something wakes
+            # us (approval granted, task created/resumed).
+            self._wake.wait(self._interval)
 
     def _tick(self) -> None:
         self._last_tick_at = datetime.now()
