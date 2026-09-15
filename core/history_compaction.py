@@ -21,11 +21,45 @@ TOOL_HISTORY_BROWSER_ACTION_LIMIT = 12
 TOOL_HISTORY_BROWSER_TEXT_LIMIT = 2000
 
 
+# Share of the budget given to the END of a value when we keep both ends.
+# Command output puts the important part last (pytest's FAILED lines and
+# summary, compiler error totals, stack traces), so stdio is tail-heavy.
+# File reads are what the caller asked to see from the top, so content is
+# head-heavy with just enough tail to show where the file ends.
+STDIO_TAIL_SHARE = 0.6
+CONTENT_TAIL_SHARE = 0.2
+
+# Keys whose strings keep both ends when trimmed, mapped to their tail share.
+_KEEP_ENDS_KEYS = {
+    "stdout": STDIO_TAIL_SHARE,
+    "stderr": STDIO_TAIL_SHARE,
+    "output": STDIO_TAIL_SHARE,
+    "content": CONTENT_TAIL_SHARE,
+}
+
+
 def _truncate_text(value, limit):
     if not isinstance(value, str) or len(value) <= limit:
         return value
     omitted = len(value) - limit
     return value[:limit] + f"... [truncated {omitted} chars]"
+
+
+def _truncate_keep_ends(value, limit, tail_share=STDIO_TAIL_SHARE):
+    """Trim a long string to about *limit* chars keeping its head AND tail.
+
+    Head-only truncation silently drops the part of command output the model
+    most needs (the failure summary at the end), which lets it guess that a
+    test run passed. Keeping both ends makes the cut visible and keeps the
+    verdict.
+    """
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    keep_tail = int(limit * tail_share)
+    keep_head = max(0, limit - keep_tail)
+    omitted = len(value) - keep_head - keep_tail
+    marker = f"\n... [truncated {omitted} chars] ...\n"
+    return value[:keep_head] + marker + (value[-keep_tail:] if keep_tail else "")
 
 
 def _compact_browser_history(data):
@@ -172,7 +206,9 @@ def _compact_value_for_history(value, path=()):
             limit = TOOL_HISTORY_READ_LIMIT
         elif key in {"stdout", "stderr"}:
             limit = TOOL_HISTORY_STDIO_LIMIT
-        elif key in {"text", "page_text_snippet", "error"}:
+        if key in _KEEP_ENDS_KEYS:
+            return _truncate_keep_ends(value, limit, _KEEP_ENDS_KEYS[key])
+        if key in {"text", "page_text_snippet", "error"}:
             limit = TOOL_HISTORY_BROWSER_TEXT_LIMIT
         elif key in {"href", "url", "final_url", "selector", "suggested_selector"}:
             limit = 300
@@ -206,7 +242,7 @@ def _compact_value_for_history(value, path=()):
     return value
 
 
-def _summarize_large_tool_data(data):
+def _summarize_large_tool_data(data, preview_limit: int = 2000):
     if not isinstance(data, dict):
         return _compact_value_for_history(data, ("data",))
 
@@ -219,6 +255,17 @@ def _summarize_large_tool_data(data):
         "deleted",
         "bytes_written",
         "replacements",
+        # run_command / background commands: the model must still see what
+        # ran and whether it succeeded even when the output is huge.
+        "command",
+        "cwd",
+        "returncode",
+        "exit_code",
+        "error_type",
+        "stdout_truncated",
+        "stderr_truncated",
+        "stdout_path",
+        "stderr_path",
         "page_title",
         "final_title",
         "url",
@@ -236,11 +283,14 @@ def _summarize_large_tool_data(data):
             summary[key] = _compact_value_for_history(data[key], ("data", key))
 
     if isinstance(data.get("content"), str):
-        summary["content_preview"] = _truncate_text(data["content"], 2000)
-    if isinstance(data.get("stdout"), str):
-        summary["stdout_preview"] = _truncate_text(data["stdout"], 2000)
-    if isinstance(data.get("stderr"), str):
-        summary["stderr_preview"] = _truncate_text(data["stderr"], 2000)
+        summary["content_preview"] = _truncate_keep_ends(
+            data["content"], preview_limit, CONTENT_TAIL_SHARE
+        )
+    for key in ("stdout", "stderr", "output"):
+        if isinstance(data.get(key), str) and data[key]:
+            summary[f"{key}_preview"] = _truncate_keep_ends(
+                data[key], preview_limit, STDIO_TAIL_SHARE
+            )
     if isinstance(data.get("page_text_snippet"), str):
         summary["page_text_snippet"] = _truncate_text(
             data["page_text_snippet"], TOOL_HISTORY_BROWSER_TEXT_LIMIT
@@ -281,26 +331,52 @@ def compact_tool_result_for_history(tool_name, tool_result, max_chars: int = TOO
     if len(serialized) <= max_chars:
         return serialized
 
-    fallback = {
-        "success": bool(tool_result.get("success")) if isinstance(tool_result, dict) else True,
-        "tool": tool_name,
-        "truncated": True,
-        "note": (
-            "Tool output was trimmed before being stored in chat history to keep "
-            "later model calls responsive."
-        ),
-    }
-    if isinstance(tool_result, dict):
-        if "error" in tool_result:
-            fallback["error"] = _truncate_text(str(tool_result["error"]), 1000)
-        if "data" in tool_result:
-            fallback["data"] = _summarize_large_tool_data(tool_result["data"])
-    else:
-        fallback["data"] = _truncate_text(str(tool_result), 4000)
+    def _build_fallback(preview_limit: int) -> dict:
+        fallback = {
+            "success": bool(tool_result.get("success")) if isinstance(tool_result, dict) else True,
+            "tool": tool_name,
+            "truncated": True,
+            "note": (
+                "Tool output was trimmed before being stored in chat history to keep "
+                "later model calls responsive."
+            ),
+        }
+        if isinstance(tool_result, dict):
+            if "error" in tool_result:
+                fallback["error"] = _truncate_text(
+                    str(tool_result["error"]), min(1000, preview_limit)
+                )
+            if "data" in tool_result:
+                fallback["data"] = _summarize_large_tool_data(
+                    tool_result["data"], preview_limit
+                )
+        else:
+            fallback["data"] = _truncate_keep_ends(str(tool_result), max(preview_limit, 200) * 2)
+        return fallback
 
-    serialized = json.dumps(fallback, ensure_ascii=False)
+    # Shrink the previews until the summary fits, rather than chopping the
+    # JSON string mid-way — a chopped result is unparseable and reads to the
+    # model as a tool crash.
+    preview_limit = 2000
+    while True:
+        serialized = json.dumps(_build_fallback(preview_limit), ensure_ascii=False)
+        if len(serialized) <= max_chars or preview_limit <= 200:
+            break
+        preview_limit //= 2
+
     if len(serialized) > max_chars:
-        serialized = _truncate_text(serialized, max_chars)
+        # Last resort: a minimal, still-valid record with whatever error text fits.
+        minimal = {
+            "success": bool(tool_result.get("success")) if isinstance(tool_result, dict) else True,
+            "tool": tool_name,
+            "truncated": True,
+            "note": "Tool output was too large to keep; only the outcome was stored.",
+        }
+        if isinstance(tool_result, dict) and "error" in tool_result:
+            room = max_chars - len(json.dumps(minimal, ensure_ascii=False)) - 40
+            if room > 20:
+                minimal["error"] = _truncate_text(str(tool_result["error"]), room)
+        serialized = json.dumps(minimal, ensure_ascii=False)
     return serialized
 
 

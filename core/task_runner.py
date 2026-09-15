@@ -120,8 +120,10 @@ class TaskRunner:
     MAX_STUCK_CYCLES = 4
     # Tool results bigger than this (serialized) are trimmed before going into
     # the persistent thread, so big CSV/dir/diff dumps don't bloat context and
-    # make the model choke (which shows up as empty responses).
-    MAX_TOOL_RESULT_CHARS = 3000
+    # make the model choke (which shows up as empty responses). Same budget as
+    # the interactive agent now that trimming keeps both ends of command
+    # output instead of dropping the tail.
+    MAX_TOOL_RESULT_CHARS = 4000
     # How many real external waits a task may take before we treat it as stuck.
     MAX_WAITS = 60
     MIN_WAIT_MINUTES = 1
@@ -482,7 +484,8 @@ class TaskRunner:
                     self._emit(task_id, "tool_error", tool=name or "?",
                                detail=str(result.get("error") or "")[:200])
                 messages.append({
-                    "role": "tool", "name": name, "content": self._tool_content_for_thread(result),
+                    "role": "tool", "name": name,
+                    "content": self._tool_content_for_thread(result, name),
                 })
 
             # Checkpoint every N rounds, and always before a state change.
@@ -549,14 +552,14 @@ class TaskRunner:
         constraints["_files_changed"] = seen
         task_store.update_task(task_id, constraints=json.dumps(constraints))
 
-    def _tool_content_for_thread(self, result: dict) -> str:
+    def _tool_content_for_thread(self, result: dict, tool_name: str | None = None) -> str:
         """Serialize a tool result for the persistent thread. Uses the same
-        compaction rules as the interactive agent (D-3), just with this
-        runner's tighter budget."""
+        compaction rules as the interactive agent (D-3) with this runner's
+        budget."""
         from core.history_compaction import compact_tool_result_for_history
         try:
             return compact_tool_result_for_history(
-                None, result, max_chars=self.MAX_TOOL_RESULT_CHARS
+                tool_name, result, max_chars=self.MAX_TOOL_RESULT_CHARS
             )
         except Exception:
             return json.dumps({"success": bool(isinstance(result, dict) and result.get("success", True))})
