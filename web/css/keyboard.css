@@ -1,0 +1,15 @@
+/* Large on-screen keyboard (web/js/keyboard.js): only on a page opened with ?keyboard=1. */
+:root { --osk-height: 272px; }
+.osk { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000; height: var(--osk-height); display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 10px; box-sizing: border-box; background: #08060bf2; border-top: 1px solid #4a2c5a; box-shadow: 0 -10px 30px #000c; user-select: none; -webkit-user-select: none; touch-action: none; }
+.osk[hidden] { display: none; }
+.osk-row { flex: 1; display: flex; gap: 6px; min-height: 0; }
+.osk-key { flex: 1 1 0; min-width: 0; padding: 0; border: 1px solid #3a2a44; border-radius: 8px; background: #17111d; color: #f0e8f4; font: 500 24px/1 ui-monospace, "DejaVu Sans Mono", monospace; box-shadow: inset 0 -2px 0 #0008; cursor: pointer; }
+.osk-fn { color: #e8a8f8; font-size: 18px; background: #110c16; }
+.osk-key.pressed { background: #2a1d33; border-color: #e8a8f8; color: #88efb1; }
+.osk-key.active { color: #88efb1; border-color: #3f7a59; }
+.osk-key.locked { background: #12261b; }
+.osk-key[data-action="enter"] { color: #d9ffe9; background: #12261b; border-color: #3f7a59; }
+.osk-spacer { visibility: hidden; }
+/* The page is laid out at 100vh: make room for the keyboard. */
+body.osk-open .sidebar, body.osk-open .main { height: calc(100vh - var(--osk-height)); }
+body.osk-open dialog[open], body.osk-open .app-dialog-card { max-height: calc(100vh - var(--osk-height) - 16px); overflow-y: auto; }

@@ -6,6 +6,9 @@
 import { wsUrl } from './lib/auth.js';
 import { WS } from './lib/ws.js';
 import { createDropdown } from './lib/dropdown.js';
+import { setupKeyboard } from './keyboard.js';
+
+setupKeyboard();  // only with ?keyboard=1 (a touchscreen launcher asks for it)
 
 // --- DOM refs ---
 const $messages = document.getElementById('messages');
