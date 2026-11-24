@@ -3241,6 +3241,8 @@ async function loadFolderPicker(path) {
 
 function openFolderPicker() {
     if (!$folderPicker || isWorking) return;
+    // Leave any text box, so the on-screen keyboard goes away instead of covering the list.
+    document.activeElement?.blur?.();
     $folderPicker.classList.remove('hidden');
     folderPickerShowNote('');
     loadFolderPicker(currentWorkspacePath || '');
