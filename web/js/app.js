@@ -2760,6 +2760,14 @@ const ws = new WS({
         showWorkspaceError(data.text || 'Could not set working directory.');
     },
 
+    workspace_picked(data) {
+        const path = String(data.path || '').trim();
+        if (!path) return;
+        if ($workspaceInput) $workspaceInput.value = path;
+        if (path === currentWorkspacePath) return;
+        ws.send({ type: 'set_workspace', path });
+    },
+
     confirm(data) {
         showConfirmCard(data);
     },
@@ -3154,120 +3162,9 @@ $workspaceForm?.addEventListener('submit', (e) => {
     ws.send({ type: 'set_workspace', path });
 });
 
-// --- Workspace folder browser ---
-// Browsing happens in the page through /api/folders. A native window opened by
-// the server could land behind a full-screen LumaKit window on a kiosk.
-const $folderPicker = document.getElementById('folder-picker');
-const $folderPickerUp = document.getElementById('folder-picker-up');
-const $folderPickerPath = document.getElementById('folder-picker-path');
-const $folderPickerPlaces = document.getElementById('folder-picker-places');
-const $folderPickerList = document.getElementById('folder-picker-list');
-const $folderPickerNote = document.getElementById('folder-picker-note');
-const $folderPickerHidden = document.getElementById('folder-picker-show-hidden');
-const $folderPickerCancel = document.getElementById('folder-picker-cancel');
-const $folderPickerUse = document.getElementById('folder-picker-use');
-
-const FOLDER_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>';
-
-let folderPickerPath = '';
-let folderPickerParent = null;
-let folderPickerRequest = 0;
-
-function folderPickerShowNote(text) {
-    $folderPickerNote.textContent = text || '';
-    $folderPickerNote.classList.toggle('hidden', !text);
-}
-
-async function loadFolderPicker(path) {
-    const request = ++folderPickerRequest;
-    const hidden = $folderPickerHidden?.checked ? '1' : '0';
-    $folderPickerList.classList.add('loading');
-    let data;
-    try {
-        const res = await fetch(`/api/folders?path=${encodeURIComponent(path)}&hidden=${hidden}`);
-        data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Could not open ${path}`);
-    } catch (err) {
-        if (request !== folderPickerRequest) return;
-        $folderPickerList.classList.remove('loading');
-        folderPickerShowNote(err.message || 'Could not open that folder.');
-        return;
-    }
-    if (request !== folderPickerRequest) return;
-    $folderPickerList.classList.remove('loading');
-
-    folderPickerPath = data.path || '';
-    folderPickerParent = data.parent ?? null;
-    // The path box keeps the end of a long path in view (right-to-left
-    // overflow); the mark keeps a leading "/" on the left.
-    $folderPickerPath.textContent = folderPickerPath ? `‎${folderPickerPath}` : 'This computer';
-    $folderPickerPath.title = folderPickerPath;
-    $folderPickerUp.disabled = folderPickerParent === null;
-    $folderPickerUse.disabled = !folderPickerPath;
-
-    $folderPickerPlaces.replaceChildren(...(data.shortcuts || []).map((place) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'folder-picker-place';
-        btn.textContent = place.name;
-        btn.title = place.path;
-        btn.classList.toggle('active', place.path === folderPickerPath);
-        btn.addEventListener('click', () => loadFolderPicker(place.path));
-        return btn;
-    }));
-
-    const rows = (data.folders || []).map((folder) => {
-        const li = document.createElement('li');
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'folder-picker-row';
-        btn.innerHTML = FOLDER_ICON;
-        const name = document.createElement('span');
-        name.textContent = folder.name;
-        btn.appendChild(name);
-        btn.addEventListener('click', () => loadFolderPicker(folder.path));
-        li.appendChild(btn);
-        return li;
-    });
-    $folderPickerList.replaceChildren(...rows);
-    $folderPickerList.scrollTop = 0;
-
-    if (!rows.length) folderPickerShowNote('No folders inside this one.');
-    else if (data.truncated) folderPickerShowNote(`Showing the first ${rows.length} folders.`);
-    else folderPickerShowNote('');
-}
-
-function openFolderPicker() {
-    if (!$folderPicker || isWorking) return;
-    $folderPicker.classList.remove('hidden');
-    folderPickerShowNote('');
-    loadFolderPicker(currentWorkspacePath || '');
-}
-
-function closeFolderPicker() {
-    $folderPicker?.classList.add('hidden');
-    folderPickerRequest++;
-}
-
-$workspaceBrowse?.addEventListener('click', openFolderPicker);
-$folderPickerUp?.addEventListener('click', () => {
-    if (folderPickerParent !== null) loadFolderPicker(folderPickerParent);
-});
-$folderPickerHidden?.addEventListener('change', () => loadFolderPicker(folderPickerPath));
-$folderPickerCancel?.addEventListener('click', closeFolderPicker);
-$folderPicker?.addEventListener('click', (e) => {
-    if (e.target === $folderPicker) closeFolderPicker();
-});
-$folderPicker?.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); closeFolderPicker(); }
-});
-$folderPickerUse?.addEventListener('click', () => {
-    const path = folderPickerPath;
-    closeFolderPicker();
-    if (!path) return;
-    if ($workspaceInput) $workspaceInput.value = path;
-    if (path === currentWorkspacePath || isWorking) return;
-    ws.send({ type: 'set_workspace', path });
+$workspaceBrowse?.addEventListener('click', () => {
+    if (isWorking) return;
+    ws.send({ type: 'pick_workspace', base: currentWorkspacePath || '' });
 });
 
 $input.addEventListener('keydown', (e) => {

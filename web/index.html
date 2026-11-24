@@ -56,7 +56,7 @@
                     <svg class="workspace-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
                     <input id="workspace-input" class="workspace-input" type="text" spellcheck="false" placeholder="Working directory">
                     <button id="workspace-browse" class="workspace-save" type="button" title="Browse for folder" aria-label="Browse for folder">
-                        <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h18"/><path d="M13 5l7 7-7 7"/></svg>
                     </button>
                 </form>
                 <span id="model-badge" class="model-badge" title="Open settings">
@@ -226,27 +226,6 @@
             <div class="app-dialog-actions">
                 <button id="app-dialog-cancel" class="task-action-btn task-action-secondary" type="button">Cancel</button>
                 <button id="app-dialog-confirm" class="task-action-btn task-action-primary" type="button">OK</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Workspace folder browser (in the page, so it works by touch and on a kiosk) -->
-    <div id="folder-picker" class="app-dialog folder-picker hidden" role="dialog" aria-modal="true" aria-labelledby="folder-picker-title">
-        <div class="app-dialog-card folder-picker-card">
-            <h3 id="folder-picker-title" class="app-dialog-title">Choose a working folder</h3>
-            <div class="folder-picker-bar">
-                <button id="folder-picker-up" class="folder-picker-up" type="button" title="Up one folder" aria-label="Up one folder">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
-                </button>
-                <span id="folder-picker-path" class="folder-picker-path"></span>
-            </div>
-            <div id="folder-picker-places" class="folder-picker-places"></div>
-            <ul id="folder-picker-list" class="folder-picker-list"></ul>
-            <p id="folder-picker-note" class="folder-picker-note hidden"></p>
-            <div class="app-dialog-actions folder-picker-actions">
-                <label class="folder-picker-hidden"><input type="checkbox" id="folder-picker-show-hidden"> Hidden folders</label>
-                <button id="folder-picker-cancel" class="task-action-btn task-action-secondary" type="button">Cancel</button>
-                <button id="folder-picker-use" class="task-action-btn task-action-primary" type="button">Use this folder</button>
             </div>
         </div>
     </div>
