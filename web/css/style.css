@@ -703,8 +703,24 @@ body {
     height: 14px;
     color: var(--accent);
     flex-shrink: 0;
-    margin-right: 7px;
 }
+
+/* The folder icon opens the folder browser too; its tap area covers the form's left edge. */
+.workspace-icon-btn {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    height: 30px;
+    margin-left: -10px;
+    padding: 0 7px 0 10px;
+    border: 0;
+    border-radius: 8px 0 0 8px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.workspace-icon-btn:hover:not(:disabled) .workspace-icon { color: var(--accent-light); }
+.workspace-icon-btn:disabled { cursor: default; opacity: 0.5; }
 
 .workspace-input {
     flex: 1;

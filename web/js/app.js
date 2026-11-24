@@ -37,6 +37,7 @@ const $suggestionCards = document.getElementById('suggestion-cards');
 const $workspaceForm = document.getElementById('workspace-form');
 const $workspaceInput = document.getElementById('workspace-input');
 const $workspaceBrowse = document.getElementById('workspace-browse');
+const $workspaceFolder = document.getElementById('workspace-folder');
 const $sidebarToggle = document.getElementById('sidebar-toggle');
 const $sidebar = document.getElementById('sidebar');
 const $diffPanel = document.getElementById('diff-panel');
@@ -241,6 +242,7 @@ function setWorking(working) {
     isWorking = working;
     if ($workspaceInput) $workspaceInput.disabled = working;
     if ($workspaceBrowse) $workspaceBrowse.disabled = working;
+    if ($workspaceFolder) $workspaceFolder.disabled = working;
     if ($photoBtn) $photoBtn.disabled = working;
     lumabotModeDropdown?.setDisabled(working);
     // Type /stop to interrupt — no UI toggle needed
@@ -3250,6 +3252,7 @@ function closeFolderPicker() {
 }
 
 $workspaceBrowse?.addEventListener('click', openFolderPicker);
+$workspaceFolder?.addEventListener('click', openFolderPicker);
 $folderPickerUp?.addEventListener('click', () => {
     if (folderPickerParent !== null) loadFolderPicker(folderPickerParent);
 });
