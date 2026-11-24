@@ -3095,6 +3095,133 @@ body {
 
 .app-dialog-actions .task-action-btn[hidden] { display: none; }
 
+/* ===== Workspace folder browser ===== */
+
+/* Above the sidebar (100) and side panels (200), below dropdowns and the keyboard. */
+.folder-picker { z-index: 250; }
+
+.folder-picker-card {
+    width: min(560px, 100%);
+    height: min(520px, calc(100vh - 40px));
+    gap: 10px;
+}
+
+.folder-picker-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.folder-picker-up {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+}
+
+.folder-picker-up svg { width: 18px; height: 18px; }
+.folder-picker-up:hover:not(:disabled) { background: var(--bg-hover); }
+.folder-picker-up:disabled { opacity: 0.35; cursor: default; }
+
+.folder-picker-path {
+    flex: 1;
+    min-width: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: rtl;
+    text-align: left;
+}
+
+.folder-picker-places {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.folder-picker-places:empty { display: none; }
+
+.folder-picker-place {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+
+.folder-picker-place:hover { background: var(--bg-hover); color: var(--text-primary); }
+.folder-picker-place.active { border-color: var(--accent-deep); color: var(--accent-light); background: var(--accent-glow); }
+
+.folder-picker-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    overscroll-behavior: contain;
+}
+
+.folder-picker-list.loading { opacity: 0.5; }
+
+.folder-picker-row {
+    width: 100%;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.folder-picker-row svg { flex: none; width: 18px; height: 18px; color: var(--accent); }
+.folder-picker-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-picker-row:hover,
+.folder-picker-row:focus-visible { background: var(--bg-hover); outline: none; }
+
+.folder-picker-note {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--text-muted);
+}
+
+.folder-picker-note.hidden { display: none; }
+
+.folder-picker-actions { align-items: center; margin-top: 0; }
+
+.folder-picker-hidden {
+    margin-right: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.folder-picker-actions .task-action-btn:disabled { opacity: 0.4; cursor: default; }
+
 /* ===== Settings ===== */
 
 .settings-content {
@@ -3670,6 +3797,12 @@ body {
 }
 
 /* ===== Scrollbar ===== */
+
+/* Firefox ignores the ::-webkit-scrollbar rules below and drew wide white bars. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
 
 ::-webkit-scrollbar {
     width: 5px;

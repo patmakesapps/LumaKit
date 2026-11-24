@@ -34,6 +34,7 @@ from agent import Agent, timestamp_message
 from core import auth as _auth
 from core import web_auth
 from core import email_draft_store
+from core import folder_browser
 from core.chat_store import (
     delete_chat,
     get_active_chat,
@@ -123,42 +124,6 @@ def _chat_workspace(chat_id: str | None) -> Path:
             except (FileNotFoundError, NotADirectoryError):
                 pass
     return _default_workspace()
-
-
-def _pick_workspace_dialog(initial: str | Path | None) -> str | None:
-    """Open a native folder picker on the server host. Returns the chosen path or None."""
-    try:
-        import tkinter
-        from tkinter import filedialog
-    except Exception:
-        return None
-
-    initial_dir = ""
-    if initial:
-        try:
-            initial_dir = str(Path(initial).expanduser().resolve(strict=False))
-        except Exception:
-            initial_dir = ""
-
-    root = tkinter.Tk()
-    try:
-        root.withdraw()
-        try:
-            root.attributes("-topmost", True)
-        except Exception:
-            pass
-        chosen = filedialog.askdirectory(
-            title="Select working directory",
-            initialdir=initial_dir or None,
-            mustexist=True,
-        )
-    finally:
-        try:
-            root.destroy()
-        except Exception:
-            pass
-    chosen = (chosen or "").strip()
-    return chosen or None
 
 
 def _workspace_payload(path: str | Path) -> dict:
@@ -453,6 +418,23 @@ async def health():
         "repo_root": str(_REPO_ROOT),
         "struqt_tools": (_REPO_ROOT / "tools" / "struqt" / "struqt_tools.py").exists(),
     }
+
+
+@app.get("/api/folders")
+async def api_list_folders(path: str = "", hidden: bool = False):
+    """Subfolders of ``path`` for the page's own workspace folder browser."""
+    try:
+        listing = folder_browser.list_folders(path, show_hidden=hidden)
+    except FileNotFoundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except NotADirectoryError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except PermissionError:
+        return JSONResponse({"error": f"No permission to open {path}"}, status_code=403)
+    except OSError as exc:
+        return JSONResponse({"error": f"Could not open {path}: {exc}"}, status_code=400)
+    listing["shortcuts"] = folder_browser.shortcuts(repo_root=_REPO_ROOT)
+    return listing
 
 
 @app.get("/api/chats")
@@ -1529,23 +1511,6 @@ async def websocket_chat(ws: WebSocket):
                     _ws_confirm_results[ws_id] = False
                     ev.set()
                 await ws.send_json({"type": "status", "text": "Stopping..."})
-                continue
-
-            if msg_type == "pick_workspace":
-                if agent_task and not agent_task.done():
-                    await ws.send_json({"type": "workspace_error", "text": "Finish or stop the current run before changing workspace."})
-                    continue
-                base_hint = data.get("base") or session.get("workspace_path") or str(_default_workspace())
-                try:
-                    chosen = await asyncio.get_event_loop().run_in_executor(
-                        None, _pick_workspace_dialog, base_hint
-                    )
-                except Exception as exc:
-                    await ws.send_json({"type": "workspace_error", "text": f"Folder picker failed: {exc}"})
-                    continue
-                if not chosen:
-                    continue
-                await ws.send_json({"type": "workspace_picked", "path": chosen})
                 continue
 
             if msg_type == "set_workspace":
